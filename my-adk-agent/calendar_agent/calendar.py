@@ -15,8 +15,10 @@ from googleapiclient.errors import HttpError
 from google.adk.agents import Agent
 from google.genai import types
 
-
-SCOPES = ["https://www.googleapis.com/auth/calendar"]
+SCOPES = [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/tasks",
+]
 
 ROOT_INSTRUCTIONS = """
 You are a helpful and precise calendar assistant that operates in the user's local time zone (e.g., IST for Asia/Kolkata).
@@ -74,23 +76,10 @@ General Instructions:
 - Prioritize clarity and correctness.
 """
 
-calendar_agent = Agent(
-    name="calendar_agent",
-    model="gemini-2.0-flash",
-    description="schedules events and creates tasks",
-    instruction=ROOT_INSTRUCTIONS,
-    tools=[get_user_timezone, 
-           create_event, 
-           delete_event,
-           parse_recurrence,
-           get_event,
-           search_events,
-           list_events,
-           update_events,
-           ]
-)
+# Agent instantiation is moved to the bottom of the file after helper functions
 
-def get_calendar_service(): #takes the credentials and uses build() to access google calendar
+# ---- Auth / Services ----
+def get_calendar_service(): # takes the credentials and uses build() to access google calendar
     creds = None
     if os.path.exists('token.json'):
         try:
@@ -108,6 +97,30 @@ def get_calendar_service(): #takes the credentials and uses build() to access go
         with open("token.json", "w", encoding="utf-8") as token:
             token.write(creds.to_json())
     return build("calendar", "v3", credentials=creds)
+
+
+def get_tasks_service():
+    """Create and return an authenticated Google Tasks API service (v1).
+
+    Uses the same `token.json`/`credentials.json` flow as `get_calendar_service`.
+    """
+    creds = None
+    if os.path.exists('token.json'):
+        try:
+            creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+        except (UnicodeDecodeError, ValueError):
+            print("Warning: 'token.json' is invalid or has an encoding issue. Attempting to re-authorize.")
+            os.remove("token.json")
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open("token.json", "w", encoding="utf-8") as token:
+            token.write(creds.to_json())
+    return build("tasks", "v1", credentials=creds)
 
 def get_user_timezone() -> str:
     """
@@ -165,11 +178,83 @@ def delete_event(event_id: str, calendar_id: str = "primary", send_updates: str 
     except HttpError as error:
         raise ValueError(f"Failed to delete event: {str(error)}")
 
-def create_tasks():
-    pass
+# ---- Time helpers ----
+def to_rfc3339_utc(dt: datetime.datetime, tz_name: str) -> str:
+    """Convert a naive or tz-aware datetime to an RFC3339 UTC string for Tasks API."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        local_tz = pytz.timezone(tz_name)
+        dt = local_tz.localize(dt)
+    utc = dt.astimezone(pytz.UTC)
+    return utc.isoformat().replace('+00:00', 'Z')
 
-def delete_tasks():
-    pass
+
+# ---- Tasks helpers ----
+def create_task(tasklist: str = "@default", title: str = None, notes: str | None = None, due: str | None = None, status: str | None = None, parent: str | None = None):
+    """Create a task in the specified tasklist.
+
+    - `due` should be an RFC3339 timestamp (use `to_rfc3339_utc` to convert).
+    - Returns the created task resource.
+    """
+    service = get_tasks_service()
+    body = {}
+    if title:
+        body["title"] = title
+    if notes is not None:
+        body["notes"] = notes
+    if due is not None:
+        body["due"] = due
+    if status is not None:
+        body["status"] = status
+    if parent is not None:
+        body["parent"] = parent
+
+    try:
+        created = service.tasks().insert(tasklist=tasklist, body=body).execute()
+        return created
+    except HttpError as error:
+        raise ValueError(f"Failed to create task: {str(error)}")
+
+
+def get_task(tasklist: str, task_id: str):
+    service = get_tasks_service()
+    try:
+        task = service.tasks().get(tasklist=tasklist, task=task_id).execute()
+        return task
+    except HttpError as error:
+        raise ValueError(f"Failed to get task: {str(error)}")
+
+
+def list_tasks(tasklist: str = "@default", show_completed: bool = False, max_results: int = 100):
+    service = get_tasks_service()
+    try:
+        resp = service.tasks().list(tasklist=tasklist, showCompleted=show_completed, maxResults=max_results).execute()
+        return resp.get("items", [])
+    except HttpError as error:
+        raise ValueError(f"Failed to list tasks: {str(error)}")
+
+
+def patch_task(tasklist: str, task_id: str, patch_fields: dict):
+    """Partially update a task using Tasks API `patch`.
+
+    `patch_fields` is a dict with any Task fields to change, e.g. {"notes": "updated"}.
+    """
+    service = get_tasks_service()
+    try:
+        updated = service.tasks().patch(tasklist=tasklist, task=task_id, body=patch_fields).execute()
+        return updated
+    except HttpError as error:
+        raise ValueError(f"Failed to patch task: {str(error)}")
+
+
+def delete_task(tasklist: str, task_id: str):
+    service = get_tasks_service()
+    try:
+        service.tasks().delete(tasklist=tasklist, task=task_id).execute()
+        return "Task deleted successfully."
+    except HttpError as error:
+        raise ValueError(f"Failed to delete task: {str(error)}")
 
 def parse_recurrence(recurrence_string: str) -> str:
     """
@@ -206,6 +291,8 @@ def parse_recurrence(recurrence_string: str) -> str:
                 rrule += f";COUNT={int(count)*52}" # Approximate weeks in a year
         return rrule
     raise ValueError(f"Could not parse recurrence: {recurrence_string}")
+
+# ---- Calendar event helpers ----
 
 def get_event(event_id: str, calendar_id: str = "primary") -> Dict:
     service = get_calendar_service()
@@ -302,6 +389,31 @@ def update_events(
         ).execute()
     except HttpError as error:
         raise ValueError(f"Failed to update event: {str(error)}")
+
+
+# ---- Agent ----
+calendar_agent = Agent(
+    name="calendar_agent",
+    model="gemini-2.0-flash",
+    description="schedules events and creates tasks",
+    instruction=ROOT_INSTRUCTIONS,
+    tools=[
+        get_user_timezone,
+        create_event,
+        delete_event,
+        parse_recurrence,
+        get_event,
+        search_events,
+        list_events,
+        update_events,
+        # Tasks tools
+        create_task,
+        get_task,
+        list_tasks,
+        patch_task,
+        delete_task,
+    ],
+)
     
 
 

@@ -1,4 +1,4 @@
-from . import agent
-from .agent import root_agent
+from . import calendar_agent
+from .calendar_agent import calendar_agent
 
-__all__ = ["agent", "root_agent"]
+__all__ = ["calendar_agent", "root_agent"]

@@ -1,3 +1,4 @@
 .env
 my-adk-agent/calendar_agent/credentials.json
 my-adk-agent/calendar_agent/token.json
+my-adk-agent/calendar_agent/token.local.json

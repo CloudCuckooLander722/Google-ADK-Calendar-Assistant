@@ -1,2 +1,4 @@
 # Google-ADK-Calendar-Assistant
-Schedules meetings, study sessions for deep work, and nonsycophantic idea challenger. Pro and money version planned for further modification and interaction with Google Services.
+
+Abstract:
+-> Google ADK extension utilizing Google Calendar and Google Tasks to schedule events and tasks, as well as providing anti-sycophantic suggestions to refine approaches for upcoming projects/exams/deadlines.

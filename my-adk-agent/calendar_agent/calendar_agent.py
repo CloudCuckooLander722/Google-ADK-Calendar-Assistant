@@ -14,8 +14,15 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import google.auth
-from google.adk.agents import LlmAgent
+from google.adk.agents import Agent, LlmAgent
 from google.genai import types
+from google.adk.planners import BuiltInPlanner
+from google.genai import types
+try:
+    from .google_maps import google_maps_tool
+except ImportError:
+    from google_maps import google_maps_tool
+
 
 SCOPES = [
     "https://www.googleapis.com/auth/calendar",
@@ -37,6 +44,8 @@ DEFAULT_TOKEN_PATHS = [
         'token.json'
 ]
 
+_USER_TIMEZONE_CACHE: Optional[str] = None
+
 def _find_first_existing(paths: list[str]) -> str | None:
         for p in paths:
                 p_abs = os.path.abspath(p)
@@ -50,12 +59,12 @@ You are a helpful and precise calendar assistant that operates in the user's loc
 Event Creation Instructions:
 When the user wants to create an event:
 - Collect essential details: title, start time, end time/duration.
-- Use `parse_natural_language_datetime` to parse dates/times/durations into ISO 8601 UTC.
+- Use `parse_natural_language_datetime` to parse dates/times/durations into local TZ (for API calls convert to UTC as needed).
 - Location and description are optional; only include if provided.
 - For recurring events, parse recurrence (e.g., "every Tuesday for 5 weeks") using `parse_recurrence` and pass as RRULE string.
 - For attendees, parse emails (e.g., "invite bob@example.com and alice@example.com") as list of dicts [{email: "bob@example.com"}, {email: "alice@example.com"}].
 - Call `create_event` with parsed values, including recurrence and attendees if provided.
-- Respond with confirmation, title/time in local TZ, and link.
+- Respond with a clear confirmation that includes the event title, and the start and end times formatted in the user's local timezone (include timezone abbreviation), plus the event link.
 
 Event Updating/Editing Instructions:
 When the user wants to update or edit an event:
@@ -65,7 +74,7 @@ When the user wants to update or edit an event:
 - For updating recurrence or attendees, parse and pass as in creation.
 - Call `update_event` with the event ID and only changed fields (pass None for unchanged), including recurrence or attendees.
 - Set `send_updates` to "all" if attendees might be affected, else "none".
-- Respond with confirmation and updated details in local TZ.
+- Respond with confirmation and updated details formatted in the user's local timezone (include timezone abbreviation).
 
 Event Deletion Instructions:
 When the user wants to delete an event:
@@ -74,6 +83,14 @@ When the user wants to delete an event:
 - Call `delete_event` with the event ID.
 - Set `send_updates` to "all" if notifying others, else "none".
 - Respond with confirmation.
+
+Task Creation and Update Instructions:
+When the user wants to create or update a task:
+- Treat the user's phrase as the task title and parse any due date/time.
+- If a specific time is mentioned (e.g. "feed the cat at 6 PM"), convert it to the user's local timezone and set `due` accordingly using an RFC3339 timestamp.
+- If no specific time is provided, create the task as an all-day task for the parsed date by using the local date with a midnight timestamp or equivalent all-day representation.
+- Use `create_task` for new tasks and `patch_task` for updates, setting only changed fields.
+- Confirm the task title and due date/time in the user's local timezone, noting when it is an all-day task.
 
 Event Search and Querying Instructions:
 When the user asks to search or query events:
@@ -92,7 +109,9 @@ When the user asks to suggest meeting times (e.g., "Suggest a time for a meeting
 - Example: "Suggest a 1-hour meeting next Tuesday morning" returns slots like "2025-09-23 10:00 AM IST - 11:00 AM IST".
 
 General Instructions:
-- Always use local time zone (e.g., IST) for inputs/outputs; convert to UTC for API.
+- Always present start and end times to the user converted to the user's local time zone (include timezone abbreviation); convert to UTC only for API requests.
+- If the user mentions a place name or landmark (e.g., "Mission San Jose High School"), resolve it to a real-time address using `google_maps_tool` and use that address for the event location.
+- For address-only location requests, validate and normalize the address with `google_maps_tool` before using it.
 - For "next [day]" (e.g., "next Friday"), interpret as next occurrence.
 - If event ID unknown for update/delete, search first.
 - Handle ambiguities by asking questions.
@@ -165,19 +184,96 @@ def get_calendar_service():
 
 def get_user_timezone() -> str:
     """
-    Detect the user's local time zone. Falls back to 'Asia/Kolkata' if detection fails.
+    Detect the user's local time zone.
+
+    - First, use an explicit environment override if set.
+    - Then, use the authenticated Google Calendar account timezone.
+    - Next, use the runtime local timezone.
+    - Finally, fall back to Asia/Kolkata if detection fails.
     """
+    global _USER_TIMEZONE_CACHE
+
+    env_tz = os.environ.get("USER_TIMEZONE") or os.environ.get("CALENDAR_TIMEZONE") or os.environ.get("TZ")
+    if env_tz:
+        return env_tz
+
+    if _USER_TIMEZONE_CACHE:
+        return _USER_TIMEZONE_CACHE
+
+    try:
+        service = get_calendar_service() #you get timezone from here...
+        settings = service.settings().get(setting="timezone").execute()
+        tz_value = settings.get("value")
+        if isinstance(tz_value, str) and tz_value:
+            _USER_TIMEZONE_CACHE = tz_value
+            return tz_value
+    except Exception:
+        pass
+
     try:
         local_tz = get_localzone()
         # Prefer canonical zone name when available (tzlocal may return different types).
         for attr in ("zone", "key"):
             name = getattr(local_tz, attr, None)
             if isinstance(name, str) and name:
+                _USER_TIMEZONE_CACHE = name
                 return name
-        return str(local_tz)
+        tz_name = str(local_tz)
+        _USER_TIMEZONE_CACHE = tz_name
+        return tz_name
     except Exception as e:
         print(f"Warning: Could not detect local time zone ({str(e)}). Falling back to 'Asia/Kolkata'.")
+        _USER_TIMEZONE_CACHE = "Asia/Kolkata"
         return "Asia/Kolkata"
+
+
+def _build_datetime_payload(datetime_str: str, tz_name: str) -> dict:
+    """Build a Calendar API datetime payload.
+
+    If the datetime string is already timezone-aware (ends with Z or an offset),
+    include only `dateTime`. Otherwise, attach the local time zone.
+    """
+    payload = {"dateTime": datetime_str}
+    if not re.search(r"(Z|[+-]\d{2}:\d{2})$", datetime_str):
+        payload["timeZone"] = tz_name
+    return payload
+
+
+def _has_time_info(text: str) -> bool:
+    return bool(re.search(r"\b(?:\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm)|at\b|morning|afternoon|evening)\b", text))
+
+
+def _parse_time_range(datetime_string: str, settings: dict) -> tuple[Optional[datetime.datetime], Optional[datetime.datetime]]:
+    """Parse expressions like '9 PM to 5 AM' or 'from 9 PM to 5 AM'."""
+    match = re.search(r"(?:from\s+)?(.+?)\s+to\s+(.+)", datetime_string, re.IGNORECASE)
+    if not match:
+        return None, None
+
+    start_text = match.group(1).strip()
+    end_text = match.group(2).strip()
+
+    # Only treat as a range if both sides contain an explicit time marker.
+    if not (re.search(r"\b(?:AM|PM|am|pm)\b", start_text) and re.search(r"\b(?:AM|PM|am|pm)\b", end_text)):
+        return None, None
+
+    start_dt = dateparser.parse(start_text, languages=['en'], settings=settings)
+    if not start_dt:
+        return None, None
+
+    range_settings = dict(settings)
+    range_settings['RELATIVE_BASE'] = start_dt
+    end_dt = dateparser.parse(end_text, languages=['en'], settings=range_settings)
+    if not end_dt:
+        return None, None
+
+    if end_dt <= start_dt:
+        end_dt += datetime.timedelta(days=1)
+
+    return start_dt, end_dt
+
+
+def is_date_only(value: str) -> bool:
+    return bool(re.match(r"^\d{4}-\d{2}-\d{2}$", value))
 
 def create_event(
         summary: str,
@@ -194,10 +290,13 @@ def create_event(
         "summary": summary,
     }
 
-    if start_datetime and end_datetime:
-        event["start"] = {"dateTime": start_datetime , "timeZone": user_timezone}
-        event["end"] = {"dateTime": end_datetime, "timeZone": user_timezone}
-
+    if is_date_only(start_datetime) and is_date_only(end_datetime):
+        event["start"] = {"date": start_datetime}
+        event["end"] = {"date": end_datetime}
+    else:
+        event["start"] = _build_datetime_payload(start_datetime, user_timezone)
+        event["end"] = _build_datetime_payload(end_datetime, user_timezone)
+        
     if location and location.strip():
         event["location"] = location
 
@@ -211,7 +310,33 @@ def create_event(
 
     try:
         created = service.events().insert(calendarId="primary", body=event).execute()
-        return f"Event created: {created.get('htmlLink')}"
+        # Build a user-friendly confirmation including local start/end times
+        user_tz = pytz.timezone(user_timezone)
+        start_obj = created.get('start', {})
+        end_obj = created.get('end', {})
+
+        def _format_event_time(part):
+            # timed event
+            if 'dateTime' in part and part['dateTime']:
+                dt = part['dateTime']
+                try:
+                    dt_obj = datetime.datetime.fromisoformat(dt.replace('Z', '+00:00'))
+                    local_dt = dt_obj.astimezone(user_tz)
+                    return local_dt.strftime("%Y-%m-%d %I:%M %p %Z")
+                except Exception:
+                    return dt
+            # all-day event
+            if 'date' in part and part['date']:
+                return part['date']
+            return ''
+
+        start_fmt = _format_event_time(start_obj)
+        end_fmt = _format_event_time(end_obj)
+        title = created.get('summary', summary)
+        link = created.get('htmlLink')
+        if start_fmt and end_fmt:
+            return f"Event created: {title} — {start_fmt} to {end_fmt} — {link}"
+        return f"Event created: {title} — {link}"
     except HttpError as error:
         resp = getattr(error, 'resp', None)
         status = getattr(resp, 'status', None)
@@ -323,8 +448,13 @@ def update_event(
     if summary is not None:
         patch_body["summary"] = summary
     if start_datetime is not None and end_datetime is not None:
-        patch_body["start"] = {"dateTime": start_datetime, "timeZone": get_user_timezone()}
-        patch_body["end"] = {"dateTime": end_datetime, "timeZone": get_user_timezone()}
+        user_timezone = get_user_timezone()
+        if is_date_only(start_datetime) and is_date_only(end_datetime):
+            patch_body["start"] = {"date": start_datetime}
+            patch_body["end"] = {"date": end_datetime}
+        else:
+            patch_body["start"] = _build_datetime_payload(start_datetime, user_timezone)
+            patch_body["end"] = _build_datetime_payload(end_datetime, user_timezone)
     if location is not None:
         patch_body["location"] = location
     if description is not None:
@@ -586,23 +716,18 @@ def delete_task(tasklist: str, task_id: str):
     except HttpError as error:
         raise ValueError(f"Failed to delete task: {str(error)}")
 
-def parse_natural_language_datetime(datetime_string: str, duration: Optional[str] = None, time_preference: Optional[str] = None) -> tuple[str, str, Optional[tuple[datetime.time, datetime.time]]]:
-    """
-    Parses a natural language date/time string in the user's local time zone
-    and returns start and end times in ISO 8601 UTC format, plus optional time window.
-    
-    Args:
-        datetime_string: Natural language input (e.g., "next Friday at 11 AM").
-        duration: Optional duration (e.g., "1 hour", "for 30 minutes").
-        time_preference: Optional preference (e.g., "morning", "9 AM to 2 PM").
-    
-    Returns:
-        Tuple of (start_datetime, end_datetime, time_window) in ISO 8601 UTC and optional (start_time, end_time).
+def parse_natural_language_datetime(
+    datetime_string: str,
+    duration: Optional[str] = None,
+    time_preference: Optional[str] = None,
+) -> tuple[str, str, Optional[tuple[datetime.time, datetime.time]]]:
+    """Parse natural language datetimes and return start/end datetimes.
+
+    Returns start/end timestamps in the user's local time zone.
     """
     user_timezone = get_user_timezone()
     settings = {
         'TIMEZONE': user_timezone,
-        'TO_TIMEZONE': 'UTC',
         'RETURN_AS_TIMEZONE_AWARE': True,
         'PREFER_DATES_FROM': 'future',
         'DATE_ORDER': 'DMY',
@@ -628,6 +753,28 @@ def parse_natural_language_datetime(datetime_string: str, duration: Optional[str
                     time_window = (start_time, end_time)
             except ValueError:
                 print(f"Could not parse time preference: {time_preference}")
+
+    def _apply_time_window(base_dt: datetime.datetime, window: tuple[datetime.time, datetime.time]) -> tuple[str, str]:
+        local_tz = pytz.timezone(user_timezone)
+        if base_dt.tzinfo is None:
+            base_dt = local_tz.localize(base_dt)
+        start_dt = datetime.datetime.combine(base_dt.date(), window[0])
+        end_dt = datetime.datetime.combine(base_dt.date(), window[1])
+        start_dt = local_tz.localize(start_dt) if start_dt.tzinfo is None else start_dt.astimezone(local_tz)
+        end_dt = local_tz.localize(end_dt) if end_dt.tzinfo is None else end_dt.astimezone(local_tz)
+        if end_dt <= start_dt:
+            end_dt += datetime.timedelta(days=1)
+        return start_dt.isoformat(), end_dt.isoformat()
+
+    # Try parsing explicit time ranges first.
+    range_start, range_end = _parse_time_range(datetime_string, settings)
+    parsed_datetime = None
+    if range_start and range_end:
+        parsed_datetime = range_start
+        start_datetime = range_start.astimezone(pytz.timezone(user_timezone)).isoformat()
+        end_datetime = range_end.astimezone(pytz.timezone(user_timezone)).isoformat()
+        time_window = (range_start.time(), range_end.time())
+        return start_datetime, end_datetime, time_window
 
     # Try parsing with dateparser first
     parsed_datetime = dateparser.parse(
@@ -694,14 +841,21 @@ def parse_natural_language_datetime(datetime_string: str, duration: Optional[str
         except ValueError:
             raise ValueError(f"Could not parse date/time: {datetime_string}")
 
-    parsed_datetime = parsed_datetime.astimezone(pytz.UTC)
-    start_datetime = parsed_datetime.isoformat().replace('+00:00', 'Z')
+    target_tz = pytz.timezone(user_timezone)
+    parsed_datetime = parsed_datetime.astimezone(target_tz)
 
-    if duration:
-        duration_minutes = parse_duration(duration)
-        end_datetime = (parsed_datetime + datetime.timedelta(minutes=duration_minutes)).isoformat().replace('+00:00', 'Z')
+    if time_window and not _has_time_info(datetime_string):
+        start_datetime, end_datetime = _apply_time_window(parsed_datetime, time_window)
+    elif _has_time_info(datetime_string):
+        start_datetime = parsed_datetime.isoformat()
+        if duration:
+            duration_minutes = parse_duration(duration)
+            end_datetime = (parsed_datetime + datetime.timedelta(minutes=duration_minutes)).isoformat()
+        else:
+            end_datetime = (parsed_datetime + datetime.timedelta(hours=1)).isoformat()
     else:
-        end_datetime = (parsed_datetime + datetime.timedelta(hours=1)).isoformat().replace('+00:00', 'Z')
+        start_datetime = parsed_datetime.date().isoformat()
+        end_datetime = (parsed_datetime.date() + datetime.timedelta(days=1)).isoformat()
 
     return start_datetime, end_datetime, time_window
 
@@ -710,10 +864,16 @@ calendar_agent = LlmAgent(
     name="calendar_agent",
     description="An agent that can manage your Google Calendar events and tasks including updating, deleting, and searching for events.",
     instruction=ROOT_INSTRUCTIONS,
+    planner=BuiltInPlanner(
+                    thinking_config=types.ThinkingConfig(
+                        include_thoughts=True,
+                        thinking_budget=1024
+                    )
+                ),
     tools=[create_event,
             delete_event,
             parse_recurrence,
-            parse_natural_language_datetime,
+            parse_natural_language_datetime, #something is wrong with parse_natural_language_datetime,
             get_event,
             search_events,
             list_events,
@@ -722,6 +882,8 @@ calendar_agent = LlmAgent(
             get_task,
             list_tasks,
             patch_task,
-            delete_task,]
+            delete_task,
+            google_maps_tool
+            ]      
 )
 

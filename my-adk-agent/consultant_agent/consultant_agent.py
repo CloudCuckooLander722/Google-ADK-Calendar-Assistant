@@ -1,16 +1,14 @@
-from google.auth.transport.requests import Request
-from google.auth.exceptions import RefreshError
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
-import google.auth
+
 from google.adk.agents import LlmAgent
-from google.adk.agents import Agent
 from google.genai import types
+from google.adk.agents import Agent
+
 from google.adk.tools import google_search, AgentTool
 
-from calendar_agent.calendar_agent import calendar_agent
+try:
+    from calendar_agent.calendar_agent import calendar_agent
+except Exception:
+    from ..calendar_agent.calendar_agent import calendar_agent
 
 
 search_agent_instruction = (

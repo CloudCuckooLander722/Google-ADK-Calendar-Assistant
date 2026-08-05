@@ -8,7 +8,6 @@ from google.adk.runners import Runner
 from google.genai import Client, types
 from calendar_agent import calendar_agent
 from google.cloud import aiplatform
-from tenacity import retry, wait_random_exponential, stop_after_attempt
 
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))

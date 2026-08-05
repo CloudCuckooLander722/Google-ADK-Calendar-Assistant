@@ -1,15 +1,12 @@
 import os
-import sys
 import asyncio
+import os
 import vertexai
 from google.adk.memory import VertexAiMemoryBankService
 from google.adk.sessions import VertexAiSessionService
 from google.adk.runners import Runner
 from google.genai import Client, types
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-from consultant_agent import consultant_agent
+from agent import root_agent
 from google.cloud import aiplatform
 from tenacity import retry, wait_random_exponential, stop_after_attempt
 
@@ -50,7 +47,7 @@ session_service = VertexAiSessionService(
 
 async def setup_session_and_runner():
     session = await session_service.create_session(app_name=APP_NAME, user_id=USER_ID)
-    runner = Runner(agent=consultant_agent, 
+    runner = Runner(agent=root_agent, 
                     app_name=APP_NAME, 
                     session_service=session_service, 
                     memory_service=memory_service,

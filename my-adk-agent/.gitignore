@@ -1,0 +1,6 @@
+# Secrets — never commit these
+credentials.json
+.env
+*.db
+__pycache__/
+*.pyc

@@ -1,0 +1,42 @@
+
+Collecting usage statistics. To deactivate, set browser.gatherUsageStats to false.
+
+2026-08-18 00:15:45.757 Uvicorn server started on :::8501
+
+  You can now view your Streamlit app in your browser.
+
+  Local URL: http://localhost:8501
+  Network URL: http://10.0.0.243:8501
+  External URL: http://20.171.127.65:8501
+
+2026-08-18 00:16:10.323 Uncaught app execution
+Traceback (most recent call last):
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/streamlit/runtime/scriptrunner/exec_code.py", line 136, in exec_func_with_error_handling
+    result = func()
+             ^^^^^^
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 816, in code_to_exec
+    exec(code, module.__dict__)  # noqa: S102
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/Google-ADK-Calendar-Assistant/my-adk-agent/ui/streamlit_ui.py", line 105, in <module>
+    run_streamlit_app()
+  File "/workspaces/Google-ADK-Calendar-Assistant/my-adk-agent/ui/streamlit_ui.py", line 46, in run_streamlit_app
+    authenticate_login()
+  File "/workspaces/Google-ADK-Calendar-Assistant/my-adk-agent/ui/streamlit_ui.py", line 34, in authenticate_login
+    st.session_state["authenticator"].check_authentification()
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/streamlit_google_auth/__init__.py", line 86, in check_authentification
+    flow.fetch_token(code=auth_code)
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/google_auth_oauthlib/flow.py", line 285, in fetch_token
+    return self.oauth2session.fetch_token(self.client_config["token_uri"], **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/requests_oauthlib/oauth2_session.py", line 406, in fetch_token
+    self._client.parse_request_body_response(r.text, scope=self.scope)
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/oauthlib/oauth2/rfc6749/clients/base.py", line 426, in parse_request_body_response
+    self.token = parse_token_response(body, scope=scope)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/oauthlib/oauth2/rfc6749/parameters.py", line 444, in parse_token_response
+    validate_token_parameters(params)
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/oauthlib/oauth2/rfc6749/parameters.py", line 451, in validate_token_parameters
+    raise_from_error(params.get('error'), params)
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/oauthlib/oauth2/rfc6749/errors.py", line 398, in raise_from_error
+    raise cls(**kwargs)
+oauthlib.oauth2.rfc6749.errors.InvalidGrantError: (invalid_grant) Missing code verifier.

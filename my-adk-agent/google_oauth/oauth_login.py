@@ -59,6 +59,10 @@ class OAuthLogin:
         self.creds_path = CREDS_PATH
 
     def login(self):
+        st.set_page_config(page_title="WorkFlow", layout="wide")
+        st.title("Automated Scheduling Assistant (Powered by ADK & Gemini)")
+        st.markdown("This application uses the Google Agent Development Kit (ADK) to automate your scheduling, implement + critique planning.")
+        st.divider()
         if 'code' not in st.query_params:
             authorization_url = self.init_google_auth()
             st.link_button(
@@ -93,7 +97,7 @@ class OAuthLogin:
         return authorization_url
 
     def get_creds(self):
-        cookies = self.cookie_manager.get_all()
+        cookies = self.cookie_manager.get_all(key="oauth_get_creds")
 
         if not cookies:
             st.info("Loading secure session context...")
@@ -152,9 +156,11 @@ class OAuthLogin:
                     # FIX: cookie now stores only the user_id (a pointer),
                     # not token material. Much smaller trust surface for
                     # anything that can read the user's browser storage.
-                    self.cookie_manager.set(cookie="user_id", val=str(user_id))
+                    self.cookie_manager.set(cookie="user_id", val=str(user_id), key="set_user_id")
 
-                    self.cookie_manager.delete("oauth_state")
+                    self.cookie_manager.delete("oauth_state", key="delete_oauth_state")
+
+                    st.query_params.clear()
                     
                     return creds
                 

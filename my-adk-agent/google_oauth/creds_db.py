@@ -13,11 +13,25 @@ public functions (upsert_credentials / get_credentials / delete_credentials)
 should not need to change shape.
 """
 
+from pathlib import Path
+import sys
+from google.oauth2.credentials import Credentials
+
+MODULE_DIR = Path(__file__).resolve().parent
+APP_ROOT = MODULE_DIR.parent
+PROJECT_ROOT = APP_ROOT.parent
+
+for base in (str(PROJECT_ROOT), str(APP_ROOT)):
+    if base not in sys.path:
+        sys.path.insert(0, base)
+
+
 import os
 import sqlite3
 import json
 from contextlib import contextmanager
 from cryptography.fernet import Fernet
+
 
 DB_PATH = os.environ.get("GOOGLE_CREDS_DB_PATH", "google_oauth_creds.db")
 
@@ -126,6 +140,8 @@ def get_credentials_dict(user_id: str) -> dict | None:
     rather than getting one back directly, to keep this module free of
     google-auth import requirements on the backend side if not needed.
     """
+    
+
     with _get_connection() as conn:
         row = conn.execute(
             "SELECT * FROM users_google_creds WHERE user_id = ?", (user_id,)
@@ -137,13 +153,13 @@ def get_credentials_dict(user_id: str) -> dict | None:
     return {
         "user_id": row["user_id"],
         "email": row["email"],
-        "access_token": _decrypt(row["access_token"]),
+        "token": _decrypt(row["access_token"]),
         "refresh_token": _decrypt(row["refresh_token"]),
+        "token_uri": row["token_uri"],
         "client_id": row["client_id"],
         "client_secret": _decrypt(row["client_secret"]),
-        "token_uri": row["token_uri"],
         "scopes": json.loads(row["scopes"]),
-        "expiry": row["expiry"],
+        "expiry": row["expiry"]
     }
 
 
@@ -151,3 +167,5 @@ def delete_credentials(user_id: str):
     """Use on logout / revoke."""
     with _get_connection() as conn:
         conn.execute("DELETE FROM users_google_creds WHERE user_id = ?", (user_id,))
+
+

@@ -1,4 +1,18 @@
 import os
+from pathlib import Path
+import sys
+from dotenv import load_dotenv
+load_dotenv()
+
+MODULE_DIR = Path(__file__).resolve().parent
+APP_ROOT = MODULE_DIR.parent          # my-adk-agent
+PROJECT_ROOT = APP_ROOT.parent
+
+for base in (str(PROJECT_ROOT), str(APP_ROOT)):
+    if base not in sys.path:
+        sys.path.insert(0, base)
+
+# now it's safe to import google_oauth as a package
 import streamlit as st
 import extra_streamlit_components as stx
 from google_auth_oauthlib.flow import Flow
@@ -7,6 +21,8 @@ from google.auth.transport import requests as google_requests
 from google_oauth import creds_db
 from google_oauth.credentials_store import get_valid_credentials
 import traceback
+from googleapiclient.discovery import build
+
 # Allow HTTP traffic for local/dev environments (Codespaces)
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
@@ -124,11 +140,14 @@ class OAuthLogin:
                     )
                     user_id = str(id_info["sub"])
                     email = str(id_info.get("email"))
+                    st.query_params["user_id"] = user_id
 
                     # FIX: persist full credentials to the encrypted DB, keyed
                     # by user_id. This is what the separate backend function
                     # will read from later -- not cookies.
                     creds_db.upsert_credentials(user_id, creds, email=email)
+
+
 
                     # FIX: cookie now stores only the user_id (a pointer),
                     # not token material. Much smaller trust surface for
@@ -136,11 +155,35 @@ class OAuthLogin:
                     self.cookie_manager.set(cookie="user_id", val=str(user_id))
 
                     self.cookie_manager.delete("oauth_state")
-                    st.query_params.clear()
-
+                    
                     return creds
+                
             except Exception as e:
-                st.error(f"FULL TRACEBACK: {e}\n", traceback.format_exc())  # check your server logs
+                st.error(f"FULL TRACEBACK: {e}\n")  # check your server logs
                 return None
 
         return None
+
+def fetch_creds():
+    user_id = st.query_params.get("user_id")
+    if not user_id:
+        return None  # no user_id in URL yet — not logged in
+
+    creds = get_valid_credentials(str(user_id))
+    st.query_params.clear()
+
+    return creds
+
+def get_calendar_service():
+    creds = fetch_creds()
+    if not creds:
+        return None
+    service = build('calendar', 'v3', credentials=creds)
+    return service
+
+def get_tasks_service():
+    creds = fetch_creds()
+    if not creds:
+        return None
+    service = build('tasks', 'v1', credentials=creds)
+    return service

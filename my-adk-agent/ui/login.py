@@ -1,6 +1,5 @@
 import streamlit as st
-from google_oauth.oauth_login import OAuthLogin
-
+from google_oauth.oauth_login import OAuthLogin, fetch_creds
 def login():
     authenticator = OAuthLogin()
     """
@@ -14,4 +13,3 @@ def login():
     authenticator.login()
     authenticator.get_creds()
     
-

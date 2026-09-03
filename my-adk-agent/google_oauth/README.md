@@ -122,7 +122,7 @@ Four components, one responsibility each:
 
 ## System Overview
 
-File 
+### 1.
 
 main.py
 
@@ -147,3 +147,13 @@ then use login()
 else
 
 then use chat_interface()
+
+#Credentials And Services
+
+##System Overview
+
+###1.
+
+Get creds from oauth_login.creds_db import get_credentials_dict
+
+Output: build() function from get_calendar_service and get_tasks_service

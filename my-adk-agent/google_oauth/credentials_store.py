@@ -10,6 +10,16 @@ Import this from BOTH:
 
 so refresh logic exists in exactly one place.
 """
+from pathlib import Path
+import sys
+
+MODULE_DIR = Path(__file__).resolve().parent
+APP_ROOT = MODULE_DIR.parent
+PROJECT_ROOT = APP_ROOT.parent
+
+for base in (str(PROJECT_ROOT), str(APP_ROOT)):
+    if base not in sys.path:
+        sys.path.insert(0, base)
 
 from datetime import datetime, timezone
 from google.oauth2.credentials import Credentials
@@ -20,7 +30,7 @@ from google_oauth import creds_db
 
 def _dict_to_credentials(data: dict) -> Credentials:
     creds = Credentials(
-        token=data["access_token"],
+        token=data["token"],
         refresh_token=data["refresh_token"],
         token_uri=data["token_uri"],
         client_id=data["client_id"],

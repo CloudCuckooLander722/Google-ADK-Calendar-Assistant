@@ -20,6 +20,8 @@ except Exception:
     
     from google.genai import types
 
+from tools.calendar_tools import parse_natural_language_datetime, parse_recurrence, create_event, update_event, delete_event, search_events, list_events, suggest_meeting_times
+
 ROOT_INSTRUCTIONS = """
 You are a helpful and precise calendar assistant that operates in the user's local time zone (e.g., IST for Asia/Kolkata).
 
@@ -97,5 +99,15 @@ calendar_agent = LlmAgent(
                         thinking_budget=1024
                     )
                 ),
+    tools=[
+        parse_natural_language_datetime,
+        parse_recurrence,
+        create_event,
+        update_event,
+        delete_event,
+        search_events,
+        list_events,
+        suggest_meeting_times
+    ]
     
 )

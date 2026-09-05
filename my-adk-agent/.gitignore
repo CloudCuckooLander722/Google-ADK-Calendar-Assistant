@@ -4,3 +4,4 @@ credentials.json
 *.db
 __pycache__/
 *.pyc
+/workspaces/Google-ADK-Calendar-Assistant/GeoLite2-City.mmdb

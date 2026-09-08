@@ -8,7 +8,7 @@ import sys
 
 try:
     from agents.calendar_agent import calendar_agent
-except Exception:
+except Exception as e:
     root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     
     if root_dir not in sys.path:
@@ -83,5 +83,6 @@ consultant_agent = LlmAgent(
                         )
                     ),
     instruction=consultant_agent_instruction,
+    tools=[search_tool, calendar_tool]
     
 )

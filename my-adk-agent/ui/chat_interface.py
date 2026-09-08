@@ -1,6 +1,22 @@
 import streamlit as st
 from services.adk_service import initialize_adk, run_adk_sync
 from config.settings import MESSAGE_HISTORY_KEY, get_api_key
+from streamlit_js_eval import streamlit_js_eval
+
+from pathlib import Path
+import sys
+
+MODULE_DIR = Path(__file__).resolve().parent
+APP_ROOT = MODULE_DIR.parent
+PROJECT_ROOT = APP_ROOT.parent
+
+for base in (str(PROJECT_ROOT), str(APP_ROOT)):
+    if base not in sys.path:
+        sys.path.insert(0, base)
+
+from ui.fetch_timezone import fetch_timezone
+
+
 
 def run_chat_interface():
     """
@@ -16,7 +32,7 @@ def run_chat_interface():
         st.stop() # Stop the application if the API key is missing, prompting the user for action.
     # Initialize ADK runner and session ID (cached to run only once).
     adk_runner, current_session_id = initialize_adk()
-    
+    fetch_timezone()
     st.divider()
     st.subheader("Chat with the Assistant") # Subheading for the chat section.
     # Initialize chat message history in Streamlit's session state if it doesn't exist.
@@ -42,4 +58,3 @@ def run_chat_interface():
         # Append assistant's response to history.
         st.session_state[MESSAGE_HISTORY_KEY].append({"role": "assistant", "content": agent_response})
 
-run_chat_interface()

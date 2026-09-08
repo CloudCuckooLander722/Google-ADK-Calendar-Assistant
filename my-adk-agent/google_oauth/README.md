@@ -157,3 +157,176 @@ then use chat_interface()
 Get creds from oauth_login.creds_db import get_credentials_dict
 
 Output: build() function from get_calendar_service and get_tasks_service
+
+## Calendar and Tasks API Requirements
+
+This section defines the behavioral contract for the calendar tools and the
+Google API services they use. The requirements are intentionally stated so
+that each one can be verified by a test or an observable API request.
+
+### 7.1 Common Preconditions
+
+Every calendar or task operation must satisfy these conditions before it
+calls Google:
+
+- `get_calendar_service()` or `get_tasks_service()` must return an
+	authenticated service. A missing credential must produce an actionable
+	authentication error; it must not become an unexplained `NoneType` failure.
+- The user's IANA timezone (for example, `America/New_York`) must be present
+	in Streamlit session state or be obtainable from the browser.
+- Natural-language dates must be parsed in the user's timezone, not the
+	server's timezone.
+- API failures must be converted into a `ValueError` that identifies the
+	failed operation while retaining the original error as its cause.
+- User input must be validated before the API request is constructed.
+
+### 7.2 Date and Time Representation
+
+The parser returns local values. It must not silently convert a user's local
+wall-clock time to UTC before returning it.
+
+| Meaning | Accepted representation | Google Calendar field |
+|---|---|---|
+| All-day date | `YYYY-MM-DD` | `date` |
+| Timed local value | `YYYY-MM-DDTHH:MM:SS+/-HH:MM` | `dateTime` plus `timeZone` |
+
+Requirements:
+
+- A value matching exactly `YYYY-MM-DD` is an all-day date. It must not be
+	sent as a Calendar `dateTime`.
+- A timed value must be timezone-aware or must be localized using the user's
+	timezone before it is sent to Google.
+- Invalid dates, invalid offsets, and malformed timestamps must be rejected
+	before the API request.
+- Calendar all-day end dates are exclusive. For a one-day event, the end date
+	must be the following local date.
+- A timed event's duration must be computed in the user's timezone. Daylight
+	saving transitions must not change the displayed local start time or create
+	an invalid offset.
+- Search and free/busy requests may be converted to UTC at the API boundary,
+	but returned and displayed values must be converted back to the user's
+	timezone.
+
+### 7.3 Calendar Event Requirements
+
+#### Create
+
+`create_event` must:
+
+- Require a non-empty summary, valid start, and valid end.
+- Use `start.date` and `end.date` for all-day events.
+- Use `start.dateTime`, `end.dateTime`, and the user's `timeZone` for timed
+	events.
+- Preserve optional location, description, recurrence, and attendees only
+	when supplied.
+- Return the created event link or a stable event identifier.
+- Never place access tokens, refresh tokens, or client secrets in the event
+	body or the returned message.
+
+#### Patch
+
+`update_event` must:
+
+- Require an event ID and at least one changed field.
+- Send only fields explicitly provided by the caller.
+- Apply the same `date` versus `dateTime` rules as event creation.
+- Use the requested attendee notification policy and default to no
+	notifications unless attendees may be affected.
+
+#### Delete
+
+`delete_event` must:
+
+- Require an event ID.
+- Delete only the requested calendar event.
+- Return a clear success message and convert API errors to an actionable
+	application error.
+
+#### Search and list
+
+`search_events` and `list_events` must:
+
+- Use RFC3339 bounds for `timeMin` and `timeMax`.
+- Expand recurring events when displaying individual occurrences.
+- Format timed results in the user's local timezone, including the timezone
+	abbreviation.
+- Display all-day results as local dates without inventing a time.
+- Include the event ID in results so a later patch or delete is unambiguous.
+
+### 7.4 Google Tasks Requirements
+
+Google Tasks has a different due-date contract from Google Calendar: it has a
+single `due` RFC3339 timestamp and no separate all-day `date` field.
+
+#### Create
+
+`create_task` must:
+
+- Require a non-empty title.
+- Accept optional notes and a task-list ID, defaulting to `@default`.
+- Convert a date-only due value such as `2026-09-07` to local midnight with
+	the user's timezone offset.
+- Preserve the local timezone offset for timed due values.
+- Send `title`, `notes` when present, and `due` when present, with no
+	unrelated fields.
+- Return the task title and task ID after a successful insert.
+
+#### Patch
+
+`patch_task` must:
+
+- Require a task ID and at least one changed field.
+- Send only changed fields: `title`, `notes`, `due`, or `status`.
+- Normalize `due` using the same local-date and local-time rules as creation.
+- Permit completion through `status="completed"` and reopening through
+	`status="needsAction"`.
+- Define a separate explicit operation if clearing an existing due date is
+	required; an omitted due value must mean "leave unchanged," not "clear."
+
+#### Delete
+
+`delete_task` must require both a task ID and the target task list ID, then
+return a clear success result after the API confirms deletion.
+
+#### Search
+
+`search_tasks` must:
+
+- Use the Tasks API `q` parameter for title/notes search when a query is
+	provided.
+- Return task title, status, and task ID for every result.
+- Support completed and incomplete tasks explicitly.
+- Return a stable no-results message rather than an empty or ambiguous
+	response.
+- Avoid exposing token material or other credential fields in results.
+
+### 7.5 Service and Identity Requirements
+
+- Calendar and Tasks services must use the same authenticated user selected by
+	the OAuth `user_id` pointer.
+- `get_calendar_service` and `get_tasks_service` must obtain credentials only
+	through `credentials_store.get_valid_credentials`; callers must not rebuild
+	credentials or read encrypted database fields directly.
+- A user ID must never be accepted from untrusted event/task content. It must
+	come from the authenticated session or a trusted backend request context.
+- The OAuth scope set must include the minimum Calendar and Tasks scopes
+	required by the operations enabled in the agent.
+- All user-facing confirmations must use local timezone formatting and must
+	distinguish all-day dates from timed values.
+
+### 7.6 Verification Checklist
+
+- [ ] Creating a timed event at `09:00` in `America/New_York` sends a local
+	offset value and displays `09:00`, not a UTC-shifted time.
+- [ ] Creating an all-day event sends `start.date` and `end.date`, not
+	`start.dateTime` or `end.dateTime`.
+- [ ] Patching only an event title leaves its dates and attendees unchanged.
+- [ ] Searching an event returns its ID and formats timed results locally.
+- [ ] Creating a task with `2026-09-07` stores a due timestamp at local
+	midnight with the correct offset.
+- [ ] Creating a task with an explicit time preserves that local time.
+- [ ] Patching a task with only `status="completed"` changes no other field.
+- [ ] Searching tasks can return both completed and incomplete tasks.
+- [ ] Deleting an event or task with an unknown ID returns a clear failure.
+- [ ] A missing or expired credential produces a re-authentication path,
+	rather than an API call with invalid credentials.

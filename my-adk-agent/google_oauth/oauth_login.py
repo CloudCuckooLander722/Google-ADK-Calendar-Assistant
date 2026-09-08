@@ -84,13 +84,10 @@ class OAuthLogin:
             include_granted_scopes='true',
             prompt='consent',
         )
-            # FIX: force Google to reissue a refresh_token every time.
-            # Without this, if a user has already granted consent once,
-            # Google will NOT send a refresh_token on subsequent logins,
-            # and your backend function will silently lose the ability
-            # to refresh access once the short-lived access token expires.
-            
-
+        # Keep the PKCE values in the Streamlit session for the immediate
+        # OAuth callback; browser cookies are written asynchronously.
+        st.session_state.oauth_state = state
+        st.session_state.oauth_code_verifier = flow.code_verifier
         self.cookie_manager.set(cookie="oauth_state", val=state, key='state')
         self.cookie_manager.set(cookie="oauth_code_verifier", val=flow.code_verifier, key='verifier')
 
@@ -99,7 +96,7 @@ class OAuthLogin:
     def get_creds(self):
         cookies = self.cookie_manager.get_all(key="oauth_get_creds")
 
-        if not cookies:
+        if not cookies and 'code' not in st.query_params:
             st.info("Loading secure session context...")
             st.stop()
 
@@ -116,7 +113,7 @@ class OAuthLogin:
 
         if 'code' in st.query_params:
             code = st.query_params.get('code')
-            saved_state = cookies.get("oauth_state")
+            saved_state = st.session_state.get("oauth_state") or cookies.get("oauth_state")
             query_state = st.query_params["state"]
             try:
                 if saved_state == query_state: #test before starting coding requirements
@@ -126,7 +123,10 @@ class OAuthLogin:
                         state=saved_state,
                     )
                     flow.redirect_uri = self.redirect_uri
-                    flow.code_verifier = cookies.get("oauth_code_verifier")
+                    flow.code_verifier = (
+                        st.session_state.get("oauth_code_verifier")
+                        or cookies.get("oauth_code_verifier")
+                    )
 
                     incoming_state = query_state
                     current_url = f"{self.redirect_uri}?code={code}&state={incoming_state}"
@@ -145,6 +145,7 @@ class OAuthLogin:
                     user_id = str(id_info["sub"])
                     email = str(id_info.get("email"))
                     st.query_params["user_id"] = user_id
+                    st.session_state["user_id"] = user_id
 
                     # FIX: persist full credentials to the encrypted DB, keyed
                     # by user_id. This is what the separate backend function
@@ -157,6 +158,7 @@ class OAuthLogin:
                     # not token material. Much smaller trust surface for
                     # anything that can read the user's browser storage.
                     self.cookie_manager.set(cookie="user_id", val=str(user_id), key="set_user_id")
+                    self.cookie_manager.set(cookie="logged_in", val="true", key="set_logged_in")
 
                     self.cookie_manager.delete("oauth_state", key="delete_oauth_state")
 
@@ -171,12 +173,24 @@ class OAuthLogin:
         return None
 
 def fetch_creds():
-    user_id = st.query_params.get("user_id")
-    if not user_id:
-        return None  # no user_id in URL yet — not logged in
+    user_id = st.session_state.get("user_id") or st.query_params.get("user_id")
 
-    creds = get_valid_credentials(str(user_id))
-    st.query_params.clear()
+    if not user_id:
+        cookie_manager = st.session_state.get("cookie_manager")
+        if cookie_manager is not None:
+            cookies = cookie_manager.get_all()
+            if isinstance(cookies, dict):
+                user_id = cookies.get("user_id")
+
+    if not user_id:
+        return None
+
+    user_id = str(user_id)
+    st.session_state["user_id"] = user_id
+
+    creds = get_valid_credentials(user_id)
+    if "user_id" in st.query_params:
+        st.query_params.clear()
 
     return creds
 

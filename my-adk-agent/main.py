@@ -21,7 +21,7 @@ def main():
     """
 
     if "logged_in" not in st.session_state:
-            st.session_state.logged_in = False
+        st.session_state.logged_in = False
     
     login_page = st.Page(login, title="Login", icon="🔑")
     home_page = st.Page(show_home_page, title="Home", icon="🏠")
@@ -29,18 +29,17 @@ def main():
 
     if st.session_state.logged_in:
         pg = st.navigation({
-             "Chat Interface": [chat_interface_page]
-        }
-        )
+            "Chat Interface": [chat_interface_page]
+        })
     else:
-         pg = st.navigation({
-              "Login": [login_page],
-              "Home": [home_page]
-         })
+        pg = st.navigation({
+            "Login": [login_page],
+            "Home": [home_page]
+        })
 
     pg.run()
 
 if __name__ == "__main__":
-     main()
+    main()
 
     

@@ -67,6 +67,6 @@ root_agent = LlmAgent(
                             include_thoughts=True,
                             thinking_budget=1024
                         )),
-    sub_agents=[consultant_agent],
+    sub_agents=[consultant_agent.clone()],
     tools=[AgentTool(calendar_agent)]
 )

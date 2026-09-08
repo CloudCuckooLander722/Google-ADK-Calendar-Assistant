@@ -10,6 +10,7 @@ for base in (str(PROJECT_ROOT), str(APP_ROOT)):
         sys.path.insert(0, base)
 
 from google_oauth.oauth_login import get_calendar_service, get_tasks_service
+from ui.fetch_timezone import fetch_timezone
 
 import datetime
 import os.path
@@ -27,27 +28,35 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from google.adk.agents import Agent
 from google.genai import types
-from streamlit_js_eval import streamlit_js_eval
-import geoip2.database
+
+import re
+import streamlit as st
+
+def has_explicit_time(datetime_string: str) -> bool:
+    """Checks if the raw input string contains any time component."""
+    time_patterns = [
+        r'\d{1,2}:\d{2}',                          # "11:30"
+        r'\d{1,2}\s*(?:AM|PM|am|pm)',               # "11 AM", "11am"
+        r'\b(morning|afternoon|evening|noon|midnight)\b',  # period words
+        r'\bat\s+\d',                               # "at 5"
+    ]
+    return any(re.search(p, datetime_string, re.IGNORECASE) for p in time_patterns)
+
 
 # 1. Timezone Handling: Use pytz and tzlocal to manage timezones and create times.
 
-def get_user_timezone() -> str:
-    """
-    Get the user's local timezone.
-    
-    Returns:
-    The user's local timezone as a string (e.g., "America/New_York")"""
-    try:
-        with geoip2.database.Reader('GeoLite2-City.mmdb') as reader:
-            response = reader.city(streamlit_js_eval("return window.location.hostname;"))
-            timezone = response.location.time_zone
-            if timezone:
-                return str(timezone)
-    except Exception as e:
-        print(f"Error occurred while fetching user timezone: {e}")
-        return "UTC"
+def get_user_timezone():
+    timezone = st.session_state.get("timezone")
+    if not timezone:
+        timezone = fetch_timezone()
 
+    if not timezone:
+        raise RuntimeError(
+            "User timezone is not available yet. Please wait for the browser timezone "
+            "to load and try again."
+        )
+
+    return timezone
 
 def parse_natural_language_datetime(datetime_string: str, duration: Optional[str] = None, time_preference: Optional[str] = None) -> tuple[str, str, Optional[tuple[datetime.time, datetime.time]]]:
     """
@@ -60,12 +69,16 @@ def parse_natural_language_datetime(datetime_string: str, duration: Optional[str
         time_preference: Optional preference (e.g., "morning", "9 AM to 2 PM").
     
     Returns:
-        Tuple of (start_datetime, end_datetime, time_window) in ISO 8601 UTC and optional (start_time, end_time).
+        Tuple of (start_datetime, end_datetime, time_window) in ISO 8601 local time and optional (start_time, end_time).
     """
-    user_timezone = get_user_timezone()
+    timezone_value = get_user_timezone()
+    user_timezone = (
+        pytz.timezone(timezone_value)
+        if isinstance(timezone_value, str)
+        else timezone_value
+    )
     settings = {
-        'TIMEZONE': user_timezone,
-        'TO_TIMEZONE': 'UTC',
+        'TIMEZONE': user_timezone.zone,
         'RETURN_AS_TIMEZONE_AWARE': True,
         'PREFER_DATES_FROM': 'future',
         'DATE_ORDER': 'DMY',
@@ -92,12 +105,17 @@ def parse_natural_language_datetime(datetime_string: str, duration: Optional[str
             except ValueError:
                 print(f"Could not parse time preference: {time_preference}")
 
-    # Try parsing with dateparser first
-    parsed_datetime = dateparser.parse(
-        datetime_string,
-        languages=['en'],
-        settings=settings
-    )
+    try:
+        parsed_datetime = dateparser.parse(
+            datetime_string,
+            languages=['en'],
+            settings=settings
+        )
+    except Exception as e:
+        raise ValueError(
+            f"dateparser failed to parse {datetime_string!r} "
+            f"using timezone {user_timezone!r}: {e}"
+        ) from e
 
     if not parsed_datetime:
         # Handle "next [day]" patterns with optional time part
@@ -114,7 +132,7 @@ def parse_natural_language_datetime(datetime_string: str, duration: Optional[str
                 raise ValueError(f"Invalid day name: {day_name}")
 
             target_weekday = day_map[day_name.lower()]
-            current_date = datetime.datetime.now(pytz.timezone(user_timezone))
+            current_date = datetime.datetime.now(user_timezone)
             current_weekday = current_date.weekday()
             days_ahead = (target_weekday - current_weekday + 7) % 7 or 7
             target_date = current_date + datetime.timedelta(days=days_ahead)
@@ -153,18 +171,24 @@ def parse_natural_language_datetime(datetime_string: str, duration: Optional[str
         try:
             # Fallback to dateutil for general parsing
             parsed_datetime = dateutil_parser.parse(datetime_string, fuzzy=True)
-            parsed_datetime = pytz.timezone(user_timezone).localize(parsed_datetime)
+            parsed_datetime = user_timezone.localize(parsed_datetime) #since this is a pytz object with a .localized attribute
         except ValueError:
             raise ValueError(f"Could not parse date/time: {datetime_string}")
 
     parsed_datetime = parsed_datetime.astimezone(user_timezone) #change
-    start_datetime = parsed_datetime.isoformat().replace('+00:00', 'Z')
+    start_datetime = parsed_datetime.isoformat()
 
     if duration:
         duration_minutes = parse_duration(duration)
-        end_datetime = (parsed_datetime + datetime.timedelta(minutes=duration_minutes)).isoformat().replace('+00:00', 'Z')
+        end_datetime = (parsed_datetime + datetime.timedelta(minutes=duration_minutes)).isoformat()
     else:
-        end_datetime = (parsed_datetime + datetime.timedelta(hours=1)).isoformat().replace('+00:00', 'Z')
+        end_datetime = (parsed_datetime + datetime.timedelta(hours=1)).isoformat()
+
+    if not has_explicit_time(datetime_string) and not time_preference:
+        date = parsed_datetime.astimezone(user_timezone).date()
+        start_datetime = date.isoformat()
+        end_datetime = (date + datetime.timedelta(days=1)).isoformat()
+        time_window = (datetime.time(0, 0), datetime.time(23, 59))
 
     return start_datetime, end_datetime, time_window
 
@@ -189,6 +213,22 @@ def parse_duration(duration: str) -> int:
     raise ValueError(f"Could not parse duration: {duration}")
 
 
+def _calendar_time_field(value: str) -> Dict[str, str]:
+    try:
+        date_value = datetime.date.fromisoformat(value)
+    except ValueError:
+        date_value = None
+
+    if date_value is not None and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        return {"date": value}
+
+    try:
+        datetime.datetime.fromisoformat(value)
+    except ValueError as error:
+        raise ValueError(f"Invalid calendar datetime: {value}") from error
+    return {"dateTime": value, "timeZone": get_user_timezone()}
+
+
 
 # Event Creation and Management: Functions to create, update, and delete events
 
@@ -201,12 +241,11 @@ def create_event(
     recurrence: Optional[str] = None,
     attendees: Optional[List[Dict[str, str]]] = None
 ):
-    user_timezone = get_user_timezone()
-    service = get_calendar_service()
+    service = get_calendar_service() #save edits for tommorow
     event = {
         "summary": summary,
-        "start": {"dateTime": start_datetime, "timeZone": user_timezone},
-        "end": {"dateTime": end_datetime, "timeZone": user_timezone},
+        "start": _calendar_time_field(start_datetime),
+        "end": _calendar_time_field(end_datetime),
     }
 
     if location and location.strip() != "":
@@ -287,9 +326,9 @@ def update_event(
     if summary is not None:
         update_body["summary"] = summary
     if start_datetime is not None:
-        update_body["start"] = {"dateTime": start_datetime, "timeZone": get_user_timezone()}
+        update_body["start"] = _calendar_time_field(start_datetime)
     if end_datetime is not None:
-        update_body["end"] = {"dateTime": end_datetime, "timeZone": get_user_timezone()}
+        update_body["end"] = _calendar_time_field(end_datetime)
     if location is not None:
         update_body["location"] = location
     if description is not None:
@@ -324,6 +363,119 @@ def delete_event(event_id: str, calendar_id: str = "primary", send_updates: str 
         return "Event deleted successfully."
     except HttpError as error:
         raise ValueError(f"Failed to delete event: {str(error)}")
+
+
+def _task_due_value(due: Optional[str]) -> Optional[str]:
+    if due is None:
+        return None
+
+    user_tz = pytz.timezone(get_user_timezone())
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", due):
+        local_datetime = user_tz.localize(
+            datetime.datetime.combine(datetime.date.fromisoformat(due), datetime.time())
+        )
+        return local_datetime.isoformat()
+
+    try:
+        parsed_due = datetime.datetime.fromisoformat(due.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError(f"Invalid task due datetime: {due}") from error
+
+    if parsed_due.tzinfo is None:
+        parsed_due = user_tz.localize(parsed_due)
+    else:
+        parsed_due = parsed_due.astimezone(user_tz)
+    return parsed_due.isoformat()
+
+
+def create_task(
+    title: str,
+    notes: str = "",
+    due: Optional[str] = None,
+    task_list_id: str = "@default"
+) -> str:
+    service = get_tasks_service()
+    body = {"title": title}
+    if notes:
+        body["notes"] = notes
+    if due is not None:
+        body["due"] = _task_due_value(due)
+
+    try:
+        created = service.tasks().insert(tasklist=task_list_id, body=body).execute()
+        return f"Task created: {created.get('title')} - ID: {created.get('id')}"
+    except HttpError as error:
+        raise ValueError(f"Failed to create task: {str(error)}")
+
+
+def patch_task(
+    task_id: str,
+    title: Optional[str] = None,
+    notes: Optional[str] = None,
+    due: Optional[str] = None,
+    status: Optional[str] = None,
+    task_list_id: str = "@default"
+) -> str:
+    service = get_tasks_service()
+    body = {}
+    if title is not None:
+        body["title"] = title
+    if notes is not None:
+        body["notes"] = notes
+    if due is not None:
+        body["due"] = _task_due_value(due)
+    if status is not None:
+        body["status"] = status
+    if not body:
+        raise ValueError("No fields provided to update.")
+
+    try:
+        updated = service.tasks().patch(
+            tasklist=task_list_id,
+            task=task_id,
+            body=body
+        ).execute()
+        return f"Task updated: {updated.get('title')} - ID: {updated.get('id')}"
+    except HttpError as error:
+        raise ValueError(f"Failed to update task: {str(error)}")
+
+
+def delete_task(task_id: str, task_list_id: str = "@default") -> str:
+    service = get_tasks_service()
+    try:
+        service.tasks().delete(tasklist=task_list_id, task=task_id).execute()
+        return "Task deleted successfully."
+    except HttpError as error:
+        raise ValueError(f"Failed to delete task: {str(error)}")
+
+
+def search_tasks(
+    query: Optional[str] = None,
+    show_completed: bool = True,
+    max_results: int = 100,
+    task_list_id: str = "@default"
+) -> List[str]:
+    service = get_tasks_service()
+    params = {
+        "tasklist": task_list_id,
+        "maxResults": max_results,
+        "showCompleted": show_completed,
+        "showHidden": False,
+    }
+    if query:
+        params["q"] = query
+
+    try:
+        result = service.tasks().list(**params).execute()
+        tasks = result.get("items", [])
+        if not tasks:
+            return ["No tasks found."]
+        return [
+            f"{task.get('title')} - {task.get('status', 'needsAction')} - ID: {task.get('id')}"
+            for task in tasks
+        ]
+    except HttpError as error:
+        raise ValueError(f"Failed to search tasks: {str(error)}")
 
 def search_events(
     query: Optional[str] = None,
@@ -398,7 +550,12 @@ def suggest_meeting_times(
 
     # Parse date and duration
     start_datetime, end_datetime, time_window = parse_natural_language_datetime(date_string, duration, time_preference)
-    parsed_date = datetime.datetime.fromisoformat(start_datetime.replace('Z', '+00:00')).astimezone(user_tz)
+    if len(start_datetime) == 10:
+        parsed_date = user_tz.localize(
+            datetime.datetime.combine(datetime.date.fromisoformat(start_datetime), datetime.time())
+        )
+    else:
+        parsed_date = datetime.datetime.fromisoformat(start_datetime).astimezone(user_tz)
     day_start = parsed_date.replace(hour=0, minute=0, second=0, microsecond=0)
     day_end = day_start + datetime.timedelta(days=1)
 

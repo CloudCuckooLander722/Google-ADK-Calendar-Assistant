@@ -5,6 +5,17 @@ import os
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
 from google.genai import types as genai_types
+import sys
+from pathlib import Path
+
+MODULE_DIR = Path(__file__).resolve().parent
+APP_ROOT = MODULE_DIR.parent
+PROJECT_ROOT = APP_ROOT.parent
+
+for base in (str(PROJECT_ROOT), str(APP_ROOT)):
+    if base not in sys.path:
+        sys.path.insert(0, base)
+    
 from agents.agent import root_agent
 from config.settings import APP_NAME_FOR_ADK, USER_ID, INITIAL_STATE, ADK_SESSION_KEY
 

@@ -33,7 +33,19 @@ from contextlib import contextmanager
 from cryptography.fernet import Fernet
 
 
-DB_PATH = os.environ.get("GOOGLE_CREDS_DB_PATH", "google_oauth_creds.db")
+# Prefer the repository/environment-backed database location:
+# GOOGLE_DB_PATH=/var/data/google_oauth_creds.db
+# If that env var is absent, fall back to a guaranteed local path near the
+# google_oauth package rather than a fragile CWD-relative filename.
+DB_PATH = os.getenv(
+    "GOOGLE_DB_PATH",
+    str(Path(__file__).resolve().parent / "google_oauth_creds.db")
+)
+
+# Ensure the configured directory exists for the requested /var/data path
+# (or for any relative fallback that needs a parent directory created).
+DB_PATH = str(Path(DB_PATH).expanduser())
+Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
 
 # FIX: Encryption key MUST come from environment / secrets manager, never hardcoded.
 # Generate one once with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"

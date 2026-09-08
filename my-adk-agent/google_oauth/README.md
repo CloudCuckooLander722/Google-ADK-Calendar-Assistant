@@ -93,7 +93,7 @@ Four components, one responsibility each:
 | Variable | Required by | Notes |
 |---|---|---|
 | `GOOGLE_CREDS_ENCRYPTION_KEY` | `creds_db.py` | Fernet key, generate once, store in secrets manager / env, never commit |
-| `GOOGLE_CREDS_DB_PATH` | `creds_db.py` | Defaults to `google_oauth_creds.db` in CWD — should be set explicitly in production to a persistent volume path |
+| `GOOGLE_DB_PATH` | `creds_db.py` | Defaults to `/var/data/google_oauth_creds.db`, with a fallback local sqlite file path inside the Google OAuth package directory — should be set explicitly in production to a persistent volume path |
 | `OAUTHLIB_INSECURE_TRANSPORT` | `oauth_login.py` | Dev/Codespaces only — **must be unset in production**, since it disables HTTPS enforcement on the redirect URI |
 | `credentials.json` (`credentials_path`) | `oauth_login.py` | Google client secrets file — treat with same sensitivity as `client_secret` |
 

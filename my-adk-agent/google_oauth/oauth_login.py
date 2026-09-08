@@ -47,8 +47,10 @@ SCOPES = [
     'https://www.googleapis.com/auth/tasks',
 ]
 
-CREDS_PATH = "/workspaces/Google-ADK-Calendar-Assistant/my-adk-agent/google_oauth/credentials.json"
-
+credentials_path = os.getenv(
+    "GOOGLE_CREDENTIALS_PATH",
+    str(Path(__file__).resolve().parent / "google_oauth" / "credentials.json")
+)
 
 class OAuthLogin:
     def __init__(self):
@@ -56,7 +58,7 @@ class OAuthLogin:
         self.redirect_uri = REDIRECT_URI
         self.scopes = SCOPES
         self.cookie_manager = get_cookie_manager()
-        self.creds_path = CREDS_PATH
+        self.creds_path = credentials_path
 
     def login(self):
         st.set_page_config(page_title="WorkFlow", layout="wide")

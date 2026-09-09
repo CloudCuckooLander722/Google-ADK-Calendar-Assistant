@@ -1,0 +1,14 @@
+streamlit
+extra-streamlit-components
+streamlit-calendar
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client
+python-dotenv
+cryptography
+dateparser
+tzlocal
+python-dateutil
+pytz
+streamlit-js-eval

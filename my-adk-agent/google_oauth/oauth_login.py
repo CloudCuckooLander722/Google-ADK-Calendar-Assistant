@@ -29,6 +29,32 @@ os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 creds_db.init_db()
 
 
+def _secret_or_env(key: str, default: str | None = None) -> str | None:
+    """
+    Streamlit-first configuration fallback.
+
+    1. Try `st.secrets['KEY']` when the calling context is a Streamlit app.
+    2. If that raises or yields an empty value, fall back to `os.environ.get('KEY')`.
+    3. If still empty, return the explicit default.
+
+    This keeps credentials and token file paths portable across Streamlit,
+    Codespaces, local dev, and Render-style deployment by avoiding hardcoded
+    filesystem assumptions.
+    """
+    try:
+        value = st.secrets[key]
+        if value:
+            return str(value)
+    except Exception:
+        pass
+
+    value = os.environ.get(key)
+    if value:
+        return str(value)
+
+    return default
+
+
 def get_cookie_manager():
     if "cookie_manager" not in st.session_state:
         st.session_state.cookie_manager = stx.CookieManager()
@@ -50,30 +76,35 @@ SCOPES = [
 
 def _resolve_credentials_path() -> str:
     """
-    Resolve a Google OAuth client-secrets file path in a portable way.
+    Resolve Google OAuth client-secrets JSON path cross-platform.
 
-    Environment-first: respect GOOGLE_CREDENTIALS_PATH when it exists.
-    But if Render or a Codespaces shell exposes a missing /etc/secrets mount,
-    fall back to the credentials file already present inside this repo:
-    my-adk-agent/google_oauth/credentials.json.
+    Example fallback block:
+        try:
+            creds_file = st.secrets['GOOGLE_CREDENTIALS_PATH']
+        except Exception:
+            creds_file = os.environ.get('GOOGLE_CREDENTIALS_PATH')
+        if not creds_file:
+            creds_file = str(Path(__file__).resolve().parent / 'credentials.json')
+
+    This is the repository-safe form: prefer a secret key or environment
+    variable if available, otherwise fall back to a relative project file.
     """
-    configured = os.getenv("GOOGLE_CREDENTIALS_PATH")
+    configured = _secret_or_env("GOOGLE_CREDENTIALS_PATH")
     if configured:
         configured_path = Path(configured).expanduser()
         if configured_path.exists():
             return str(configured_path)
 
-    # Preferred repo location in the present workspace.
+    # Standard relative project path fallback; avoids Render-specific hardcoding.
     repo_google_oauth_path = Path(__file__).resolve().parent / "credentials.json"
     if repo_google_oauth_path.exists():
         return str(repo_google_oauth_path)
 
-    # Also support a top-level repo fallback for a locally checked-in export.
     repo_root_path = Path(__file__).resolve().parent.parent / "credentials.json"
     if repo_root_path.exists():
         return str(repo_root_path)
 
-    # Final fallback for developer environments that only carry the package file.
+    # Final safe fallback: return the package-local path as a relative string.
     return str(repo_google_oauth_path)
 
 

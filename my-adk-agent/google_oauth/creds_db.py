@@ -33,14 +33,40 @@ from contextlib import contextmanager
 from cryptography.fernet import Fernet
 
 
-# Prefer an environment-controlled database location when it is writable.
-# On Render, the standard durable location is /var/data/google_oauth_creds.db.
-# In Codespaces and local workspace-style dev, use the repository-local
-# package directory so the file is directly accessible without root-owned
-# system permissions.
+# Prefer a database location in a portable relative project path.
+# Many environments (Render, Streamlit Cloud, Codespaces, local dev)
+# export credentials via secrets or environment variables instead of baking
+# a hardcoded /var/data path into the app.
 
 RENDER_DB_PATH = Path('/var/data/google_oauth_creds.db')
 LOCAL_DB_PATH = Path(__file__).resolve().parent / 'google_oauth_creds.db'
+
+
+def _secret_or_env(key: str, default: str | None = None) -> str | None:
+    """
+    Streamlit-first secret/env fallback helper used for cross-platform file config.
+
+    Example:
+        try:
+            val = st.secrets[key]
+        except Exception:
+            val = os.environ.get(key)
+        if not val:
+            val = default
+    """
+    try:
+        import streamlit as st
+        value = st.secrets[key]
+        if value:
+            return str(value)
+    except Exception:
+        pass
+
+    value = os.environ.get(key)
+    if value:
+        return str(value)
+
+    return default
 
 
 def _resolve_db_path() -> str:
@@ -48,33 +74,32 @@ def _resolve_db_path() -> str:
     Choose a portable SQLite DB file path.
 
     Priority:
-      1. GOOGLE_DB_PATH if explicitly set and writable.
-      2. RENDER_DB_PATH (/var/data/google_oauth_creds.db) if we are on Render.
+      1. GOOGLE_DB_PATH via Streamlit secrets first then environment variable.
+      2. RENDER_DB_PATH field if a Render-style environment variable or secret
+         is configured and writable.
       3. LOCAL_DB_PATH inside the workspace package directory for Codespaces/local dev.
 
-    If the configured path cannot be created because of permission error or
-    missing parent directory, fall back safely to the workspace-local file.
+    This keeps the path OS-agnostic and avoids a hardcoded Render filesystem.
     """
-    configured_path = os.getenv("GOOGLE_DB_PATH")
+    configured_path = _secret_or_env("GOOGLE_DB_PATH") or os.environ.get("GOOGLE_DB_PATH")
     if configured_path:
         candidate = Path(configured_path).expanduser()
         try:
             candidate.parent.mkdir(parents=True, exist_ok=True)
-            # Touch the parent directory by opening a sentinel connection-less
-            # check: directory creation success proves we can use this location.
             return str(candidate)
         except (PermissionError, OSError):
             return str(LOCAL_DB_PATH)
 
-    if os.getenv("RENDER"):
+    render_path = _secret_or_env("RENDER_DB_PATH") or os.environ.get("RENDER_DB_PATH")
+    if render_path:
+        candidate = Path(render_path).expanduser()
         try:
-            RENDER_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            return str(RENDER_DB_PATH)
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            return str(candidate)
         except (PermissionError, OSError):
             return str(LOCAL_DB_PATH)
 
-    # Codespaces and ordinary local workspace development should use the
-    # repository-local file rather than /var/data, which is not always writable.
+    # Final cross-platform fallback: local repo-relative DB path.
     return str(LOCAL_DB_PATH)
 
 

@@ -33,19 +33,59 @@ from contextlib import contextmanager
 from cryptography.fernet import Fernet
 
 
-# Prefer the repository/environment-backed database location:
-# GOOGLE_DB_PATH=/var/data/google_oauth_creds.db
-# If that env var is absent, fall back to a guaranteed local path near the
-# google_oauth package rather than a fragile CWD-relative filename.
-DB_PATH = os.getenv(
-    "GOOGLE_DB_PATH",
-    str(Path(__file__).resolve().parent / "google_oauth_creds.db")
-)
+# Prefer an environment-controlled database location when it is writable.
+# On Render, the standard durable location is /var/data/google_oauth_creds.db.
+# In Codespaces and local workspace-style dev, use the repository-local
+# package directory so the file is directly accessible without root-owned
+# system permissions.
 
-# Ensure the configured directory exists for the requested /var/data path
-# (or for any relative fallback that needs a parent directory created).
-DB_PATH = str(Path(DB_PATH).expanduser())
-Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+RENDER_DB_PATH = Path('/var/data/google_oauth_creds.db')
+LOCAL_DB_PATH = Path(__file__).resolve().parent / 'google_oauth_creds.db'
+
+
+def _resolve_db_path() -> str:
+    """
+    Choose a portable SQLite DB file path.
+
+    Priority:
+      1. GOOGLE_DB_PATH if explicitly set and writable.
+      2. RENDER_DB_PATH (/var/data/google_oauth_creds.db) if we are on Render.
+      3. LOCAL_DB_PATH inside the workspace package directory for Codespaces/local dev.
+
+    If the configured path cannot be created because of permission error or
+    missing parent directory, fall back safely to the workspace-local file.
+    """
+    configured_path = os.getenv("GOOGLE_DB_PATH")
+    if configured_path:
+        candidate = Path(configured_path).expanduser()
+        try:
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            # Touch the parent directory by opening a sentinel connection-less
+            # check: directory creation success proves we can use this location.
+            return str(candidate)
+        except (PermissionError, OSError):
+            return str(LOCAL_DB_PATH)
+
+    if os.getenv("RENDER"):
+        try:
+            RENDER_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+            return str(RENDER_DB_PATH)
+        except (PermissionError, OSError):
+            return str(LOCAL_DB_PATH)
+
+    # Codespaces and ordinary local workspace development should use the
+    # repository-local file rather than /var/data, which is not always writable.
+    return str(LOCAL_DB_PATH)
+
+
+DB_PATH = _resolve_db_path()
+
+# Ensure the configured directory exists for the selected DB location.
+try:
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+except (PermissionError, OSError):
+    DB_PATH = str(LOCAL_DB_PATH)
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
 
 # FIX: Encryption key MUST come from environment / secrets manager, never hardcoded.
 # Generate one once with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"

@@ -47,10 +47,37 @@ SCOPES = [
     'https://www.googleapis.com/auth/tasks',
 ]
 
-credentials_path = os.getenv(
-    "GOOGLE_CREDENTIALS_PATH",
-    str(Path(__file__).resolve().parent / "google_oauth" / "credentials.json")
-)
+
+def _resolve_credentials_path() -> str:
+    """
+    Resolve a Google OAuth client-secrets file path in a portable way.
+
+    Environment-first: respect GOOGLE_CREDENTIALS_PATH when it exists.
+    But if Render or a Codespaces shell exposes a missing /etc/secrets mount,
+    fall back to the credentials file already present inside this repo:
+    my-adk-agent/google_oauth/credentials.json.
+    """
+    configured = os.getenv("GOOGLE_CREDENTIALS_PATH")
+    if configured:
+        configured_path = Path(configured).expanduser()
+        if configured_path.exists():
+            return str(configured_path)
+
+    # Preferred repo location in the present workspace.
+    repo_google_oauth_path = Path(__file__).resolve().parent / "credentials.json"
+    if repo_google_oauth_path.exists():
+        return str(repo_google_oauth_path)
+
+    # Also support a top-level repo fallback for a locally checked-in export.
+    repo_root_path = Path(__file__).resolve().parent.parent / "credentials.json"
+    if repo_root_path.exists():
+        return str(repo_root_path)
+
+    # Final fallback for developer environments that only carry the package file.
+    return str(repo_google_oauth_path)
+
+
+credentials_path = _resolve_credentials_path()
 
 class OAuthLogin:
     def __init__(self):

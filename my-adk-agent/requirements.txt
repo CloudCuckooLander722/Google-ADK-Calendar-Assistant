@@ -12,3 +12,4 @@ tzlocal
 python-dateutil
 pytz
 streamlit-js-eval
+google-adk

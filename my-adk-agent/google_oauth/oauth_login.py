@@ -23,6 +23,12 @@ from google_oauth.credentials_store import get_valid_credentials
 import traceback
 from googleapiclient.discovery import build
 
+if "PORT" in os.environ:
+    REDIRECT_URI = os.environ.get("PORT")
+else:
+    REDIRECT_URI = "https://fluffy-space-xylophone-5g4jv4qp99r72p7gq-8501.app.github.dev/"
+
+
 # Allow HTTP traffic for local/dev environments (Codespaces)
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
@@ -60,7 +66,6 @@ def get_cookie_manager():
         st.session_state.cookie_manager = stx.CookieManager()
     return st.session_state.cookie_manager
 
-REDIRECT_URI = "https://fluffy-space-xylophone-5g4jv4qp99r72p7gq-8501.app.github.dev/"
 
 # FIX: added openid + userinfo.email so Google's token response includes an
 # ID token we can decode for a stable, permanent user_id (the "sub" claim).

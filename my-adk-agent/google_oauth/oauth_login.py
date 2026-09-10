@@ -78,34 +78,34 @@ def _resolve_credentials_path() -> str:
     """
     Resolve Google OAuth client-secrets JSON path cross-platform.
 
-    Example fallback block:
-        try:
-            creds_file = st.secrets['GOOGLE_CREDENTIALS_PATH']
-        except Exception:
-            creds_file = os.environ.get('GOOGLE_CREDENTIALS_PATH')
-        if not creds_file:
-            creds_file = str(Path(__file__).resolve().parent / 'credentials.json')
-
-    This is the repository-safe form: prefer a secret key or environment
-    variable if available, otherwise fall back to a relative project file.
+    Prefer the configured environment or Streamlit secret, but normalize any
+    relative value to the active my-adk-agent directory before returning it.
+    This keeps credential file handling dynamic and repository-local.
     """
     configured = _secret_or_env("GOOGLE_CREDENTIALS_PATH")
     if configured:
         configured_path = Path(configured).expanduser()
+        if not configured_path.is_absolute():
+            configured_path = APP_ROOT / configured_path
         if configured_path.exists():
             return str(configured_path)
 
-    # Standard relative project path fallback; avoids Render-specific hardcoding.
+    # Standard project-relative config file fallback; keeps the app dynamic
+    # relative to the active my-adk-agent directory context.
+    repo_config_credentials_path = APP_ROOT / "config" / "credentials.json"
+    if repo_config_credentials_path.exists():
+        return str(repo_config_credentials_path)
+
     repo_google_oauth_path = Path(__file__).resolve().parent / "credentials.json"
     if repo_google_oauth_path.exists():
         return str(repo_google_oauth_path)
 
-    repo_root_path = Path(__file__).resolve().parent.parent / "credentials.json"
+    repo_root_path = APP_ROOT.parent / "credentials.json"
     if repo_root_path.exists():
         return str(repo_root_path)
 
-    # Final safe fallback: return the package-local path as a relative string.
-    return str(repo_google_oauth_path)
+    # Final safe fallback: return the package-local path as an absolute string.
+    return str(repo_config_credentials_path)
 
 
 credentials_path = _resolve_credentials_path()

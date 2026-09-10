@@ -39,7 +39,7 @@ from cryptography.fernet import Fernet
 # a hardcoded /var/data path into the app.
 
 RENDER_DB_PATH = Path('/var/data/google_oauth_creds.db')
-LOCAL_DB_PATH = Path(__file__).resolve().parent / 'google_oauth_creds.db'
+LOCAL_DB_PATH = APP_ROOT / 'data' / 'google_oauth_creds.db'
 
 
 def _secret_or_env(key: str, default: str | None = None) -> str | None:
@@ -77,13 +77,17 @@ def _resolve_db_path() -> str:
       1. GOOGLE_DB_PATH via Streamlit secrets first then environment variable.
       2. RENDER_DB_PATH field if a Render-style environment variable or secret
          is configured and writable.
-      3. LOCAL_DB_PATH inside the workspace package directory for Codespaces/local dev.
+      3. LOCAL_DB_PATH under the active my-adk-agent data directory.
 
-    This keeps the path OS-agnostic and avoids a hardcoded Render filesystem.
+    Relative DATABASE URI values are resolved against APP_ROOT so the
+    requested active directory context stays consistent for local/dev,
+    Codespaces, and generated Docker or file-operation artifacts.
     """
     configured_path = _secret_or_env("GOOGLE_DB_PATH") or os.environ.get("GOOGLE_DB_PATH")
     if configured_path:
         candidate = Path(configured_path).expanduser()
+        if not candidate.is_absolute():
+            candidate = APP_ROOT / candidate
         try:
             candidate.parent.mkdir(parents=True, exist_ok=True)
             return str(candidate)
@@ -99,7 +103,7 @@ def _resolve_db_path() -> str:
         except (PermissionError, OSError):
             return str(LOCAL_DB_PATH)
 
-    # Final cross-platform fallback: local repo-relative DB path.
+    # Final cross-platform fallback: active-directory relative DB path.
     return str(LOCAL_DB_PATH)
 
 

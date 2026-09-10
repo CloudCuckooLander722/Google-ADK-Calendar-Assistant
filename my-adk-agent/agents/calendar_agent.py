@@ -2,6 +2,7 @@ from google.adk.agents import Agent, LlmAgent
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from google.adk.planners import BuiltInPlanner
+from google.adk.tools import google_maps_grounding
 from pathlib import Path
 import os
 import sys
@@ -115,7 +116,8 @@ calendar_agent = LlmAgent(
         create_task,
         patch_task,
         delete_task,
-        search_tasks
+        search_tasks,
+        google_maps_grounding
     ]
     
 )

@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Privacy Policy — WorkFlow</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 720px; margin: 0 auto; padding: 40px 20px; line-height: 1.65; color: #1a1a1a; }
+  h1 { font-size: 1.8rem; }
+  h2 { font-size: 1.25rem; margin-top: 1.8em; }
+  .updated { color: #666; font-size: 0.9rem; }
+  code { background: #f2f2f2; padding: 0.1em 0.4em; border-radius: 4px; }
+  a { color: #1a73e8; }
+</style>
+</head>
+<body>
+  <h1>Privacy Policy for WorkFlow</h1>
+  <p class="updated">Last updated: September 11, 2026</p>
+
+  <p>WorkFlow ("the app", "we", "our") is an automated scheduling assistant that helps you manage your Google Calendar and Google Tasks through natural-language conversation. This policy explains what data we access, how we use it, and how it is protected.</p>
+
+  <h2>1. What we access</h2>
+  <p>When you sign in with Google, WorkFlow requests the following permissions (OAuth scopes):</p>
+  <ul>
+    <li><strong>Your email address and basic profile identifier</strong> (<code>openid</code>, <code>userinfo.email</code>) — used solely to identify your account and associate it with your stored credentials.</li>
+    <li><strong>Google Calendar</strong> (<code>auth/calendar</code>) — to read, create, update, and delete events on your calendar at your request.</li>
+    <li><strong>Google Tasks</strong> (<code>auth/tasks</code>) — to read, create, update, and delete tasks on your task lists at your request.</li>
+  </ul>
+  <p>We only access this data in direct response to actions you take in the app (e.g., asking to schedule, move, or look up an event or task). We do not access your calendar or tasks in the background without a corresponding action you initiated.</p>
+
+  <h2>2. How we use your data</h2>
+  <p>Your calendar and task data is used exclusively to fulfill the requests you make within the app — for example, interpreting "move my dentist appointment to next Tuesday" and making the corresponding change via the Google Calendar API. Relevant event/task details are passed to Google's Gemini model (via the Google Agent Development Kit) solely to interpret your request and generate a response for that single interaction.</p>
+  <p><strong>Your Google Workspace / Google Calendar and Tasks data is not used to develop, improve, or train generalized AI and/or machine learning models.</strong> Data is used transiently to process your specific request and is not incorporated into any model training pipeline.</p>
+  <p>We do not sell your data, share it with advertisers, or use it for any purpose other than operating the features you directly use.</p>
+
+  <h2>3. How your data is stored</h2>
+  <p>WorkFlow does not store your calendar events or task content. What we do store, per user account, is:</p>
+  <ul>
+    <li>Your Google account identifier and email address (used to look up your saved sign-in).</li>
+    <li>Your OAuth access token, refresh token, and client secret — encrypted at rest (Fernet/AES-based symmetric encryption) in a Google Cloud Firestore database. These are never stored in plaintext, in cookies, or in browser local storage.</li>
+  </ul>
+  <p>Your browser session only ever holds a random account pointer (not your actual tokens). Tokens are decrypted in memory only when needed to make an API call on your behalf, and only by the server-side application — never exposed to the client or any third party.</p>
+
+  <h2>4. Data retention and deletion</h2>
+  <p>Your encrypted credentials are retained until you revoke access or request deletion. You can:</p>
+  <ul>
+    <li>Revoke WorkFlow's access at any time from your <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google Account permissions page</a>, which immediately invalidates our stored tokens.</li>
+    <li>Request full deletion of your stored account record by emailing us at <a href="mailto:mt9312025@gmail.com">mt9312025@gmail.com</a>.</li>
+  </ul>
+
+  <h2>5. Third parties</h2>
+  <p>WorkFlow uses the following third-party infrastructure to operate:</p>
+  <ul>
+    <li><strong>Google Cloud Platform</strong> (Cloud Run for hosting, Firestore for encrypted credential storage, Gemini for natural-language understanding) — subject to <a href="https://cloud.google.com/terms/cloud-privacy-notice" target="_blank" rel="noopener">Google Cloud's privacy commitments</a>.</li>
+  </ul>
+  <p>We do not share your data with any other third party.</p>
+
+  <h2>6. Security</h2>
+  <p>All token material is encrypted at rest, transmitted only over HTTPS, and access-controlled server-side. Only the minimum scopes needed to provide the app's features are requested.</p>
+
+  <h2>7. Changes to this policy</h2>
+  <p>If this policy changes materially, the "Last updated" date above will be revised. Continued use of WorkFlow after a change constitutes acceptance of the updated policy.</p>
+
+  <h2>8. Contact</h2>
+  <p>Questions about this policy or your data can be sent to <a href="mailto:mt9312025@gmail.com">mt9312025@gmail.com</a>.</p>
+
+  <p><a href="index.html">&larr; Back to home</a></p>
+</body>
+</html>

@@ -7,7 +7,7 @@ Four components, one responsibility each:
 | File | Responsibility | Runs in |
 |---|---|---|
 | `oauth_login.py` | Drive the browser-facing OAuth handshake; identify the user; hand off to storage | Streamlit app |
-| `creds_db.py` | Encrypted persistence of one credential row per `user_id` | Shared (imported by both sides) |
+| `creds_db.py` | Encrypted persistence of one credential document per `user_id` (Firestore) | Shared (imported by both sides) |
 | `credentials_store.py` | Single source of truth for "give me a *valid* Credentials object for this user" (includes refresh) | Shared (imported by both sides) |
 | `backend_example.py` | Consume credentials to call Google APIs | Backend function (separate process) |
 
@@ -36,14 +36,14 @@ Four components, one responsibility each:
 
 **Must:**
 - Fail loudly at import time if `GOOGLE_CREDS_ENCRYPTION_KEY` is unset (already implemented as a `RuntimeError`). Silent fallback to an unencrypted mode is explicitly disallowed.
-- Encrypt `access_token`, `refresh_token`, and `client_secret` before writing to disk. `client_id`, `email`, `scopes`, `expiry` may remain plaintext (not bearer-usable on their own).
-- `upsert_credentials` must preserve an existing `refresh_token` when the incoming write has none (e.g., a plain access-token refresh cycle). Never let a refresh operation null out a previously stored refresh token.
-- `user_id` is the primary key. One row per user, full stop — no per-session rows, no per-browser rows.
-- `init_db()` must be idempotent (`CREATE TABLE IF NOT EXISTS`) and safe to call on every app boot.
+- Encrypt `access_token`, `refresh_token`, and `client_secret` before writing to Firestore. `client_id`, `email`, `scopes`, `expiry` may remain plaintext (not bearer-usable on their own).
+- `upsert_credentials` must preserve an existing `refresh_token` when the incoming write has none (e.g., a plain access-token refresh cycle) — done via a Firestore `merge=True` write that omits the field entirely rather than writing `None`. Never let a refresh operation null out a previously stored refresh token.
+- `user_id` is the document ID. One document per user, full stop — no per-session documents, no per-browser documents.
+- `init_db()` is a no-op kept for interface compatibility (Firestore has no schema to create); safe to call on every app boot.
 
 **Must not:**
-- Must not expose raw SQL to callers outside this module. `oauth_login.py` and `backend_example.py` interact with credentials only through `credentials_store.py`, never with `sqlite3` directly.
-- Must not be the concurrency bottleneck once traffic grows — SQLite's single-writer lock is acceptable for now (same-machine, moderate load) but is the flagged first thing to swap for Postgres if write contention appears (see §5).
+- Must not expose the raw Firestore client to callers outside this module. `oauth_login.py` and `backend_example.py` interact with credentials only through `credentials_store.py`, never with `google.cloud.firestore` directly.
+- Must not assume a single-writer bottleneck the way the previous SQLite-file version did — Firestore is shared across every Cloud Run instance and scales writes independently, which is exactly the property Cloud Run's stateless/ephemeral instances require (see §5).
 
 ### 2.3 `credentials_store.py`
 
@@ -92,10 +92,12 @@ Four components, one responsibility each:
 
 | Variable | Required by | Notes |
 |---|---|---|
-| `GOOGLE_CREDS_ENCRYPTION_KEY` | `creds_db.py` | Fernet key, generate once, store in secrets manager / env, never commit |
-| `GOOGLE_DB_PATH` | `creds_db.py` | Defaults to `/var/data/google_oauth_creds.db`, with a fallback local sqlite file path inside the Google OAuth package directory — should be set explicitly in production to a persistent volume path |
+| `GOOGLE_CREDS_ENCRYPTION_KEY` | `creds_db.py` | Fernet key, generate once, store in Secret Manager / env, never commit |
+| `PROJECT_ID` / `GOOGLE_CLOUD_PROJECT` | `creds_db.py` | GCP project hosting the Firestore database; falls back to ADC's default project if unset |
+| `FIRESTORE_CREDS_COLLECTION` | `creds_db.py` | Optional, defaults to `users_google_creds` |
+| `OAUTH_REDIRECT_URI` | `oauth_login.py` | Required in production (no dev fallback) — must exactly match a redirect URI registered on the OAuth client in Google Cloud Console |
 | `OAUTHLIB_INSECURE_TRANSPORT` | `oauth_login.py` | Dev/Codespaces only — **must be unset in production**, since it disables HTTPS enforcement on the redirect URI |
-| `credentials.json` (`credentials_path`) | `oauth_login.py` | Google client secrets file — treat with same sensitivity as `client_secret` |
+| `GOOGLE_CREDENTIALS_PATH` | `oauth_login.py` | Path to the Google client-secrets JSON — required in production, typically a Secret Manager secret mounted as a volume |
 
 ---
 
@@ -103,7 +105,7 @@ Four components, one responsibility each:
 
 1. **No re-consent path when `refresh_token` is missing.** If a user's stored row has no refresh token (edge case: they revoked access in their Google account, or the consent screen was skipped some other way) and their access token expires, `get_valid_credentials` currently returns a `Credentials` object that will fail on next actual API call, not a clean "please log in again" signal. Recommend: check `creds.expired and not creds.refresh_token` explicitly and return `None` in that case instead.
 2. **No token revocation / logout flow.** `creds_db.delete_credentials(user_id)` exists but nothing in `oauth_login.py` calls it yet. Needed for a logout button and for handling Google-side revocation gracefully (a 401 from `build()` should trigger a DB row deletion and re-auth prompt, not a raw exception).
-3. **SQLite concurrency ceiling.** Fine for same-machine, low-to-moderate concurrent writes. If backend function and Streamlit app start fighting over write locks under load, migrate `creds_db.py`'s connection layer to Postgres — the public function signatures (`upsert_credentials`, `get_credentials_dict`, `delete_credentials`) are designed to stay stable across that swap.
+3. **~~SQLite concurrency ceiling~~ (resolved).** `creds_db.py` now stores credentials in Firestore rather than a local SQLite file, so every Cloud Run instance (and the backend function) shares one consistent, durable store instead of each instance having its own invisible copy. The public function signatures (`upsert_credentials`, `get_credentials_dict`, `delete_credentials`) were kept stable across the swap.
 4. **No audit trail.** `updated_at` exists but nothing logs *who* refreshed a token *when* for security review purposes. Low priority unless this handles sensitive calendars.
 
 ---

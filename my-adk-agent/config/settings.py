@@ -2,9 +2,11 @@ import os
 import logging
 from dotenv import load_dotenv
 load_dotenv() # Load environment variables from a .env file. This is crucial for keeping sensitive data like API keys out of your main codebase.
-# Suppress most ADK internal logs to keep the console clean during Streamlit runs.
-# You can change this to logging.INFO or logging.DEBUG for more verbose output during debugging.
-logging.basicConfig(level=logging.ERROR) 
+# Default to INFO so app logs reach Cloud Logging on Cloud Run; override with LOG_LEVEL.
+# Noisy third-party libraries are turned down separately below.
+logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
+for _noisy_logger in ("google", "google_genai", "google_adk", "urllib3", "httpx", "httpcore"):
+    logging.getLogger(_noisy_logger).setLevel(logging.WARNING)
 MODEL_GEMINI = "gemini-2.0-flash" # Specifies the Google Gemini model to be used by the ADK agent.
 APP_NAME_FOR_ADK = "greeting_app" # A unique name for your application within ADK, used for session management.
 USER_ID = "ketanraj" # A default user ID. In a real application, this would be dynamic (e.g., from a login system).

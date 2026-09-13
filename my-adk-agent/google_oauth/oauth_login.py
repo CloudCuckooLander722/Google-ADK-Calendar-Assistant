@@ -20,17 +20,28 @@ from google.oauth2 import id_token as google_id_token
 from google.auth.transport import requests as google_requests
 from google_oauth import creds_db
 from google_oauth.credentials_store import get_valid_credentials
-import traceback
+import logging
 from googleapiclient.discovery import build
 
-if "PORT" in os.environ:
-    REDIRECT_URI = os.environ.get("PORT")
-else:
-    REDIRECT_URI = "https://fluffy-space-xylophone-5g4jv4qp99r72p7gq-8501.app.github.dev/"
+_ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
+
+_DEV_REDIRECT_URI_FALLBACK = "https://fluffy-space-xylophone-5g4jv4qp99r72p7gq-8501.app.github.dev/"
+REDIRECT_URI = os.environ.get("OAUTH_REDIRECT_URI")
+if not REDIRECT_URI:
+    if _ENVIRONMENT == "production":
+        raise RuntimeError(
+            "OAUTH_REDIRECT_URI must be set in production -- it has no dev "
+            "fallback. Set it to this service's public HTTPS URL and add "
+            "that same URL to the OAuth client's authorized redirect URIs "
+            "in Google Cloud Console."
+        )
+    REDIRECT_URI = _DEV_REDIRECT_URI_FALLBACK
 
 
-# Allow HTTP traffic for local/dev environments (Codespaces)
-os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+# Allow HTTP traffic for local/dev environments (Codespaces) only. Must stay
+# unset in production so HTTPS is enforced on the OAuth redirect_uri.
+if _ENVIRONMENT != "production":
+    os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 creds_db.init_db()
 
@@ -83,9 +94,12 @@ def _resolve_credentials_path() -> str:
     """
     Resolve Google OAuth client-secrets JSON path cross-platform.
 
-    Prefer the configured environment or Streamlit secret, but normalize any
-    relative value to the active my-adk-agent directory before returning it.
-    This keeps credential file handling dynamic and repository-local.
+    Prefer the configured environment or Streamlit secret (GOOGLE_CREDENTIALS_PATH),
+    normalizing a relative value to the active my-adk-agent directory. In
+    production this should point at a Secret Manager secret mounted as a
+    volume (e.g. /secrets/credentials.json) -- there is no dev fallback
+    there, so a missing/misconfigured path fails loudly at startup instead
+    of surfacing as an opaque OAuth error later.
     """
     configured = _secret_or_env("GOOGLE_CREDENTIALS_PATH")
     if configured:
@@ -94,22 +108,21 @@ def _resolve_credentials_path() -> str:
             configured_path = APP_ROOT / configured_path
         if configured_path.exists():
             return str(configured_path)
+        if _ENVIRONMENT == "production":
+            raise RuntimeError(
+                f"GOOGLE_CREDENTIALS_PATH is set to '{configured_path}' but "
+                "that file does not exist."
+            )
 
-    # Standard project-relative config file fallback; keeps the app dynamic
-    # relative to the active my-adk-agent directory context.
+    if _ENVIRONMENT == "production":
+        raise RuntimeError(
+            "GOOGLE_CREDENTIALS_PATH must be set in production to the "
+            "mounted OAuth client-secrets file (e.g. a Secret Manager "
+            "volume mount)."
+        )
+
+    # Local dev fallback only; not used in production (see above).
     repo_config_credentials_path = APP_ROOT / "config" / "credentials.json"
-    if repo_config_credentials_path.exists():
-        return str(repo_config_credentials_path)
-
-    repo_google_oauth_path = Path(__file__).resolve().parent / "credentials.json"
-    if repo_google_oauth_path.exists():
-        return str(repo_google_oauth_path)
-
-    repo_root_path = APP_ROOT.parent / "credentials.json"
-    if repo_root_path.exists():
-        return str(repo_root_path)
-
-    # Final safe fallback: return the package-local path as an absolute string.
     return str(repo_config_credentials_path)
 
 
@@ -231,8 +244,9 @@ class OAuthLogin:
                     
                     return creds
                 
-            except Exception as e:
-                st.error(f"FULL TRACEBACK: {e}\n")  # check your server logs
+            except Exception:
+                logging.exception("OAuth callback failed while exchanging authorization code")
+                st.error("Sign-in failed. Please try logging in again.")
                 return None
 
         return None

@@ -2,6 +2,7 @@ import streamlit as st
 from services.adk_service import initialize_adk, run_adk_sync
 from config.settings import MESSAGE_HISTORY_KEY, get_api_key
 from streamlit_js_eval import streamlit_js_eval
+from streamlit_calendar import calendar as st_calendar
 
 from pathlib import Path
 import sys
@@ -19,57 +20,48 @@ from ui.fetch_timezone import fetch_timezone
 from google_oauth.oauth_login import get_calendar_service
 
 
-def _safe_google_calendar_events(max_results: int = 5):
+def _google_calendar_month_events(max_results: int = 250):
     """
-    Return the upcoming live Google Calendar events for the signed-in user.
-    If the user is not authenticated or no events are available, return []
-    rather than crashing the page.
+    Return this month's Google Calendar events as event dicts shaped for the
+    streamlit-calendar (FullCalendar) widget: {"title", "start", "end", "allDay"}.
+    Empty list if the user isn't signed in or the calendar can't be reached.
     """
     service = get_calendar_service()
     if service is None:
         return []
 
+    now = datetime.datetime.now(datetime.timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if month_start.month == 12:
+        month_end = month_start.replace(year=month_start.year + 1, month=1)
+    else:
+        month_end = month_start.replace(month=month_start.month + 1)
+
     try:
-        time_min = datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
         events_result = service.events().list(
             calendarId="primary",
-            timeMin=time_min,
+            timeMin=month_start.isoformat(),
+            timeMax=month_end.isoformat(),
             maxResults=max_results,
             singleEvents=True,
             orderBy="startTime",
         ).execute()
-        return events_result.get("items", [])
+        raw_events = events_result.get("items", [])
     except Exception:
         return []
 
-
-def _format_event_markdown(events):
-    """
-    Render the live Google Calendar events as plain markdown text blocks.
-    This intentionally avoids custom HTML grids or widget-like visual output.
-    """
-    if not events:
-        return "- No Google Calendar events found."
-
-    lines = []
-    for event in events:
-        summary = event.get("summary") or "Untitled event"
+    calendar_events = []
+    for event in raw_events:
         start = event.get("start", {})
-        if start.get("dateTime"):
-            try:
-                value = start["dateTime"]
-                dt = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
-                time_label = dt.strftime("%a %H:%M")
-            except Exception:
-                time_label = start["dateTime"]
-        elif start.get("date"):
-            time_label = start["date"]
-        else:
-            time_label = "All day"
+        end = event.get("end", {})
+        calendar_events.append({
+            "title": event.get("summary") or "Untitled event",
+            "start": start.get("dateTime") or start.get("date"),
+            "end": end.get("dateTime") or end.get("date"),
+            "allDay": "date" in start,
+        })
+    return calendar_events
 
-        lines.append(f"- {time_label} — {summary}")
-
-    return "\n".join(lines)
 
 
 def run_chat_interface():
@@ -417,11 +409,21 @@ def run_chat_interface():
             st.session_state[MESSAGE_HISTORY_KEY].append({"role": "assistant", "content": agent_response})
 
     with calendar_col:
-        events = _safe_google_calendar_events(max_results=5)
-        month_label = datetime.datetime.utcnow().strftime("%B %Y")
-        event_rows_md = _format_event_markdown(events)
-
         st.markdown("### Google Calendar")
-        st.markdown(f"**{month_label}**")
-        st.markdown(event_rows_md)
+        calendar_events = _google_calendar_month_events()
+        st_calendar(
+            events=calendar_events,
+            options={
+                "initialView": "dayGridMonth",
+                "headerToolbar": {
+                    "left": "prev,next today",
+                    "center": "title",
+                    "right": "dayGridMonth,timeGridWeek,listWeek",
+                },
+                "height": 620,
+            },
+            key="google_calendar_view",
+        )
+        if not calendar_events:
+            st.caption("No events found for this month, or you're not signed in to Google Calendar yet.")
 

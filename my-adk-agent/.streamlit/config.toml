@@ -1,2 +1,5 @@
-port = 8051
+[server]
 address = "0.0.0.0"
+headless = true
+enableCORS = false
+enableXsrfProtection = false

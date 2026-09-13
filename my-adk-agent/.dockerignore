@@ -1,0 +1,22 @@
+# Virtual environments / caches
+.venv/
+.venv-1/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Secrets -- never bake these into the image
+.env
+.env.*
+credentials.json
+config/credentials.json
+google_oauth/credentials.json
+*.db
+data/
+
+# Logs / VCS / docs
+streamlit.log
+*.log
+.git
+.gitignore

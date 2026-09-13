@@ -10,12 +10,13 @@ def test_oauth_login_uses_credentials_path_variable_only():
     assert "self.creds_path = credentials_path" in source
 
 
-def test_google_oauth_creds_db_uses_google_db_path_and_safe_fallback():
+def test_google_oauth_creds_db_uses_firestore_and_requires_encryption_key():
     source = Path("my-adk-agent/google_oauth/creds_db.py").read_text()
 
-    assert '"GOOGLE_DB_PATH"' in source
-    assert 'google_oauth_creds.db' in source
-    assert "GOOGLE_CREDS_DB_PATH" not in source
+    assert "from google.cloud import firestore" in source
+    assert "GOOGLE_CREDS_ENCRYPTION_KEY" in source
+    assert "GOOGLE_DB_PATH" not in source
+    assert "sqlite3" not in source
 
 
 def test_calendar_agent_prompt_requires_cal_newport_style_creation_summary():
@@ -26,14 +27,13 @@ def test_calendar_agent_prompt_requires_cal_newport_style_creation_summary():
     assert "events and tasks created" in source
 
 
-def test_creds_db_resolves_codespaces_and_render_safe_database_paths():
+def test_creds_db_preserves_refresh_token_on_merge_and_supports_delete():
     source = Path("my-adk-agent/google_oauth/creds_db.py").read_text()
 
-    assert "def _resolve_db_path" in source
-    assert "RENDER_DB_PATH" in source
-    assert "LOCAL_DB_PATH" in source
-    assert "GOOGLE_DB_PATH" in source
-    assert "PermissionError" in source
+    assert "def upsert_credentials" in source
+    assert "def get_credentials_dict" in source
+    assert "def delete_credentials" in source
+    assert "merge=True" in source
 
 
 def test_oauth_login_supports_env_or_repo_credentials_fallback_and_homepage_about_style():

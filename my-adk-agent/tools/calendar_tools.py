@@ -214,6 +214,20 @@ def parse_duration(duration: str) -> int:
     raise ValueError(f"Could not parse duration: {duration}")
 
 
+def _calendar_service():
+    service = get_calendar_service()
+    if service is None:
+        raise ValueError("Not signed in to Google Calendar. Please log in again.")
+    return service
+
+
+def _tasks_service():
+    service = get_tasks_service()
+    if service is None:
+        raise ValueError("Not signed in to Google Tasks. Please log in again.")
+    return service
+
+
 def _calendar_time_field(value: str) -> Dict[str, str]:
     try:
         date_value = datetime.date.fromisoformat(value)
@@ -242,7 +256,7 @@ def create_event(
     recurrence: Optional[str] = None,
     attendees: Optional[List[Dict[str, str]]] = None
 ):
-    service = get_calendar_service() #save edits for tommorow
+    service = _calendar_service() #save edits for tommorow
     event = {
         "summary": summary,
         "start": _calendar_time_field(start_datetime),
@@ -301,7 +315,7 @@ def parse_recurrence(recurrence_string: str) -> str:
     raise ValueError(f"Could not parse recurrence: {recurrence_string}")
 
 def get_event(event_id: str, calendar_id: str = "primary") -> Dict:
-    service = get_calendar_service()
+    service = _calendar_service()
     try:
         event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
         return event
@@ -320,7 +334,7 @@ def update_event(
     calendar_id: str = "primary",
     send_updates: str = "none" # "all", "externalOnly", or "none"
 ) -> str:
-    service = get_calendar_service()
+    service = _calendar_service()
     update_body = {}
 
     # Conditionally add fields to update_body only if they are provided
@@ -354,7 +368,7 @@ def update_event(
         raise ValueError(f"Failed to update event: {str(error)}")
 
 def delete_event(event_id: str, calendar_id: str = "primary", send_updates: str = "none") -> str:
-    service = get_calendar_service()
+    service = _calendar_service()
     try:
         service.events().delete(
             calendarId=calendar_id,
@@ -395,7 +409,7 @@ def create_task(
     due: Optional[str] = None,
     task_list_id: str = "@default"
 ) -> str:
-    service = get_tasks_service()
+    service = _tasks_service()
     body = {"title": title}
     if notes:
         body["notes"] = notes
@@ -417,7 +431,7 @@ def patch_task(
     status: Optional[str] = None,
     task_list_id: str = "@default"
 ) -> str:
-    service = get_tasks_service()
+    service = _tasks_service()
     body = {}
     if title is not None:
         body["title"] = title
@@ -442,7 +456,7 @@ def patch_task(
 
 
 def delete_task(task_id: str, task_list_id: str = "@default") -> str:
-    service = get_tasks_service()
+    service = _tasks_service()
     try:
         service.tasks().delete(tasklist=task_list_id, task=task_id).execute()
         return "Task deleted successfully."
@@ -456,7 +470,7 @@ def search_tasks(
     max_results: int = 100,
     task_list_id: str = "@default"
 ) -> List[str]:
-    service = get_tasks_service()
+    service = _tasks_service()
     params = {
         "tasklist": task_list_id,
         "maxResults": max_results,
@@ -485,7 +499,7 @@ def search_events(
     max_results: int = 10,
     calendar_id: str = "primary"
 ) -> List[str]:
-    service = get_calendar_service()
+    service = _calendar_service()
     params = {
         "calendarId": calendar_id,
         "maxResults": max_results,
@@ -545,7 +559,7 @@ def suggest_meeting_times(
     Returns:
         List of formatted time slots in local time zone (e.g., "2025-09-23 10:00 AM IST").
     """
-    service = get_calendar_service()
+    service = _calendar_service()
     user_timezone = get_user_timezone()
     user_tz = pytz.timezone(user_timezone)
 

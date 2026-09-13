@@ -1,8 +1,7 @@
-from google.adk.agents import Agent, LlmAgent
+from google.adk.agents import LlmAgent
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from google.adk.planners import BuiltInPlanner
-from google.adk.tools import google_maps_grounding
 from pathlib import Path
 import os
 import sys
@@ -23,6 +22,7 @@ except Exception:
     from google.genai import types
 
 from tools.calendar_tools import parse_natural_language_datetime, parse_recurrence, create_event, update_event, delete_event, search_events, list_events, suggest_meeting_times, create_task, patch_task, delete_task, search_tasks
+from tools.maps_tools import resolve_address
 
 ROOT_INSTRUCTIONS = """
 You are a helpful and precise calendar assistant that operates in the user's local time zone (e.g., IST for Asia/Kolkata).
@@ -84,8 +84,8 @@ When the user asks to suggest meeting times (e.g., "Suggest a time for a meeting
 General Instructions:
 - Always present start and end times to the user converted to the user's local time zone (include timezone abbreviation); convert to UTC only for API requests.
 - When an event or task is created, respond with a short AI-generated summary following a Cal Newport-inspired pattern: clear, attention-preserving, distraction-reducing, and grounded in the actual created event or task. This can be appended after the user-facing confirmation and should summarize the events and tasks created without adding unnecessary complexity.
-- If the user mentions a place name or landmark (e.g., "Mission San Jose High School"), resolve it to a real-time address using `google_maps_tool` and use that address for the event location.
-- For address-only location requests, validate and normalize the address with `google_maps_tool` before using it.
+- If the user mentions a place name or landmark (e.g., "Mission San Jose High School"), resolve it to a real address using `resolve_address` and use that address for the event location.
+- For address-only location requests, validate and normalize the address with `resolve_address` before using it.
 - For "next [day]" (e.g., "next Friday"), interpret as next occurrence.
 - If event ID unknown for update/delete, search first.
 - Handle ambiguities by asking questions.
@@ -117,7 +117,7 @@ calendar_agent = LlmAgent(
         patch_task,
         delete_task,
         search_tasks,
-        google_maps_grounding
+        resolve_address
     ]
     
 )

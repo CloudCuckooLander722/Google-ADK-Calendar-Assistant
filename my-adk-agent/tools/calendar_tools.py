@@ -59,18 +59,19 @@ def get_user_timezone():
 
     return timezone
 
-def parse_natural_language_datetime(datetime_string: str, duration: Optional[str] = None, time_preference: Optional[str] = None) -> tuple[str, str, Optional[tuple[datetime.time, datetime.time]]]:
+def parse_natural_language_datetime(datetime_string: str, duration: Optional[str] = None, time_preference: Optional[str] = None) -> tuple[str, str, Optional[tuple[str, str]]]:
     """
     Parses a natural language date/time string in the user's local time zone
     and returns start and end times in ISO 8601 UTC format, plus optional time window.
-    
+
     Args:
         datetime_string: Natural language input (e.g., "next Friday at 11 AM").
         duration: Optional duration (e.g., "1 hour", "for 30 minutes").
         time_preference: Optional preference (e.g., "morning", "9 AM to 2 PM").
-    
+
     Returns:
-        Tuple of (start_datetime, end_datetime, time_window) in ISO 8601 local time and optional (start_time, end_time).
+        Tuple of (start_datetime, end_datetime, time_window) in ISO 8601 local time and
+        optional (start_time, end_time) as "HH:MM" strings (JSON-serializable for tool calls).
     """
     timezone_value = get_user_timezone()
     user_timezone = (
@@ -191,7 +192,13 @@ def parse_natural_language_datetime(datetime_string: str, duration: Optional[str
         end_datetime = (date + datetime.timedelta(days=1)).isoformat()
         time_window = (datetime.time(0, 0), datetime.time(23, 59))
 
-    return start_datetime, end_datetime, time_window
+    serialized_time_window = (
+        (time_window[0].strftime("%H:%M"), time_window[1].strftime("%H:%M"))
+        if time_window
+        else None
+    )
+
+    return str(start_datetime), str(end_datetime), serialized_time_window
 
 def parse_duration(duration: str) -> int:
     """
@@ -219,6 +226,34 @@ def _calendar_service():
     if service is None:
         raise ValueError("Not signed in to Google Calendar. Please log in again.")
     return service
+
+
+def list_calendars() -> List[Dict[str, object]]:
+    """
+    List calendars the user has access to, with their IDs and display names.
+
+    Use this to pick the right `calendar_id` for an event when the user hasn't
+    explicitly named a calendar: compare the event's topic against each
+    calendar's `summary` and choose the best semantic match, falling back to
+    the calendar with `primary: True` when no name is a clear match.
+
+    Returns:
+        List of dicts with `id`, `summary`, and `primary` (bool) for each calendar.
+    """
+    service = _calendar_service()
+    try:
+        result = service.calendarList().list().execute()
+        calendars = result.get("items", [])
+        return [
+            {
+                "id": cal.get("id"),
+                "summary": cal.get("summary", cal.get("id")),
+                "primary": cal.get("primary", False),
+            }
+            for cal in calendars
+        ]
+    except HttpError as error:
+        raise ValueError(f"Failed to list calendars: {str(error)}")
 
 
 def _tasks_service():
@@ -254,7 +289,8 @@ def create_event(
     location: str = "",
     description: str = "",
     recurrence: Optional[str] = None,
-    attendees: Optional[List[Dict[str, str]]] = None
+    attendees: Optional[List[Dict[str, str]]] = None,
+    calendar_id: str = "primary",
 ):
     service = _calendar_service() #save edits for tommorow
     event = {
@@ -273,7 +309,7 @@ def create_event(
         event["attendees"] = attendees
 
     try:
-        created = service.events().insert(calendarId="primary", body=event).execute()
+        created = service.events().insert(calendarId=calendar_id, body=event).execute()
         return f"Event created: {created.get('htmlLink')}"
     except HttpError as error:
         raise ValueError(f"Failed to create event: {str(error)}")
@@ -314,7 +350,7 @@ def parse_recurrence(recurrence_string: str) -> str:
         return rrule
     raise ValueError(f"Could not parse recurrence: {recurrence_string}")
 
-def get_event(event_id: str, calendar_id: str = "primary") -> Dict:
+def get_event(event_id: str, calendar_id: str,) -> Dict:
     service = _calendar_service()
     try:
         event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
@@ -564,7 +600,13 @@ def suggest_meeting_times(
     user_tz = pytz.timezone(user_timezone)
 
     # Parse date and duration
-    start_datetime, end_datetime, time_window = parse_natural_language_datetime(date_string, duration, time_preference)
+    start_datetime, end_datetime, time_window_str = parse_natural_language_datetime(date_string, duration, time_preference)
+    time_window = (
+        (datetime.datetime.strptime(time_window_str[0], "%H:%M").time(),
+         datetime.datetime.strptime(time_window_str[1], "%H:%M").time())
+        if time_window_str
+        else None
+    )
     if len(start_datetime) == 10:
         parsed_date = user_tz.localize(
             datetime.datetime.combine(datetime.date.fromisoformat(start_datetime), datetime.time())

@@ -21,11 +21,21 @@ except Exception:
     
     from google.genai import types
 
-from tools.calendar_tools import parse_natural_language_datetime, parse_recurrence, create_event, update_event, delete_event, search_events, list_events, suggest_meeting_times, create_task, patch_task, delete_task, search_tasks
+from tools.calendar_tools import parse_natural_language_datetime, parse_recurrence, create_event, update_event, delete_event, search_events, list_events, suggest_meeting_times, create_task, patch_task, delete_task, search_tasks, list_calendars
 from tools.maps_tools import resolve_address
 
 ROOT_INSTRUCTIONS = """
 You are a helpful and precise calendar assistant that operates in the user's local time zone (e.g., IST for Asia/Kolkata).
+
+Calendar Selection Instructions:
+Most tools take a `calendar_id`. When the user has not explicitly named which calendar to use (e.g., "put it on my Work calendar"):
+- Call `list_calendars` to get the available calendars (`id`, `summary`, `primary`).
+- Identify the main topic/subject of the request (e.g., "make cake for kaoruko waguri" -> topic "cake"/"baking").
+- Compare that topic against each calendar's `summary` and choose the `id` of the calendar whose name is the best semantic match (e.g., topic "cake" matches a calendar named "Baking" or "Recipes" better than "Work" or "Kaoruko").
+- If no calendar name is a clear, reasonably confident match, use the calendar where `primary` is True (equivalent to `calendar_id="primary"`).
+- Use the chosen `id` as the `calendar_id` argument for the relevant tool call (`create_event`, `update_event`, `delete_event`, `get_event`, `search_events`, `suggest_meeting_times`).
+- Do this silently as part of planning the tool call — don't ask the user to confirm the calendar choice unless two calendars are equally strong matches.
+- This does not apply to Tasks (`create_task`, `patch_task`, `delete_task`, `search_tasks`), which use `task_list_id`, not `calendar_id`.
 
 Event Creation Instructions:
 When the user wants to create an event:
@@ -72,6 +82,14 @@ When the user asks to search or query events:
 - If no results, say so politely.
 - For upcoming events, use `list_events`.
 
+Importance / Priority Filtering Instructions:
+When the user asks for "important" tasks/events, "top priorities", "what matters" for a given period (e.g., "important tasks for today", "this week"):
+- The Calendar and Tasks APIs do not expose a native importance field, so you must never refuse or say this is unsupported.
+- Use `list_events`/`search_events` (with time_min/time_max parsed via `parse_natural_language_datetime`) and `search_tasks` to fetch every event/task in the requested window first.
+- Then rank/filter them yourself using judgment over the returned titles, descriptions, and attendee counts. Treat as higher-importance signals: urgency keywords (deadline, due, urgent, final, exam, interview, review, submission), events with multiple attendees or external participants, and items explicitly marked or phrased as high-priority by the user in this conversation.
+- Present the filtered/ranked short list first, then note that the ranking is inferred (not an API-provided priority) and offer to show the full unfiltered list if the user wants it.
+- If the fetch returns nothing for the window, say so plainly rather than guessing.
+
 Meeting Time Suggestions Instructions:
 When the user asks to suggest meeting times (e.g., "Suggest a time for a meeting next Tuesday"):
 - Use `suggest_meeting_times` with the target date, duration, and optional time preference (e.g., "morning", "9 AM to 2 PM").
@@ -107,6 +125,7 @@ calendar_agent = LlmAgent(
     tools=[
         parse_natural_language_datetime,
         parse_recurrence,
+        list_calendars,
         create_event,
         update_event,
         delete_event,

@@ -33,6 +33,27 @@ from google.genai import types
 import re
 import streamlit as st
 
+# Every locale code dateparser.languages.loader.LocaleDataLoader ships, 'en' first
+# so an ambiguous string resolves to English before any other locale is tried.
+DATEPARSER_LANGUAGES = [
+    'en', 'af', 'agq', 'ak', 'am', 'ar', 'as', 'asa', 'ast', 'az', 'az-Cyrl', 'az-Latn', 'bas',
+    'be', 'bem', 'bez', 'bg', 'bm', 'bn', 'bo', 'br', 'brx', 'bs', 'bs-Cyrl', 'bs-Latn', 'ca',
+    'ce', 'cgg', 'chr', 'ckb', 'cs', 'cy', 'da', 'dav', 'de', 'dje', 'dsb', 'dua', 'dyo', 'dz',
+    'ebu', 'ee', 'el', 'eo', 'es', 'et', 'eu', 'ewo', 'fa', 'ff', 'fi', 'fil', 'fo', 'fr',
+    'fur', 'fy', 'ga', 'gd', 'gl', 'gsw', 'gu', 'guz', 'gv', 'ha', 'haw', 'he', 'hi', 'hr',
+    'hsb', 'hu', 'hy', 'id', 'ig', 'ii', 'is', 'it', 'ja', 'jgo', 'jmc', 'ka', 'kab', 'kam',
+    'kde', 'kea', 'khq', 'ki', 'kk', 'kl', 'kln', 'km', 'kn', 'ko', 'kok', 'ks', 'ksb', 'ksf',
+    'ksh', 'kw', 'ky', 'lag', 'lb', 'lg', 'lkt', 'ln', 'lo', 'lrc', 'lt', 'lu', 'luo', 'luy',
+    'lv', 'mas', 'mer', 'mfe', 'mg', 'mgh', 'mgo', 'mk', 'ml', 'mn', 'mr', 'ms', 'mt', 'mua',
+    'my', 'mzn', 'naq', 'nb', 'nd', 'ne', 'nl', 'nmg', 'nn', 'nnh', 'nus', 'nyn', 'om', 'or',
+    'os', 'pa', 'pa-Arab', 'pa-Guru', 'pl', 'ps', 'pt', 'qu', 'rm', 'rn', 'ro', 'rof', 'ru',
+    'rw', 'rwk', 'sah', 'saq', 'sbp', 'se', 'seh', 'ses', 'sg', 'shi', 'shi-Latn', 'shi-Tfng',
+    'si', 'sk', 'sl', 'smn', 'sn', 'so', 'sq', 'sr', 'sr-Cyrl', 'sr-Latn', 'sv', 'sw', 'ta',
+    'te', 'teo', 'th', 'ti', 'tl', 'to', 'tr', 'twq', 'tzm', 'ug', 'uk', 'ur', 'uz', 'uz-Arab',
+    'uz-Cyrl', 'uz-Latn', 'vi', 'vun', 'wae', 'xog', 'yav', 'yi', 'yo', 'yue', 'zgh', 'zh',
+    'zh-Hans', 'zh-Hant', 'zu',
+]
+
 def has_explicit_time(datetime_string: str) -> bool:
     """Checks if the raw input string contains any time component."""
     time_patterns = [
@@ -79,12 +100,19 @@ def parse_natural_language_datetime(datetime_string: str, duration: Optional[str
         if isinstance(timezone_value, str)
         else timezone_value
     )
+    # Single anchor for "now"/"today" — every parsing path below must be
+    # pinned to this instead of reaching for its own default, or they drift
+    # out of sync with each other and with the user's actual local day.
+    now = datetime.datetime.now(user_timezone)
     settings = {
         'TIMEZONE': user_timezone.zone,
         'RETURN_AS_TIMEZONE_AWARE': True,
         'PREFER_DATES_FROM': 'future',
         'DATE_ORDER': 'DMY',
-        'STRICT_PARSING': False
+        'STRICT_PARSING': False,
+        # dateparser needs this naive — an aware RELATIVE_BASE silently
+        # breaks its relative-offset math (e.g. "tomorrow" stops adding a day).
+        'RELATIVE_BASE': now.replace(tzinfo=None),
     }
 
     time_window = None
@@ -107,73 +135,87 @@ def parse_natural_language_datetime(datetime_string: str, duration: Optional[str
             except ValueError:
                 print(f"Could not parse time preference: {time_preference}")
 
-    try:
-        parsed_datetime = dateparser.parse(
-            datetime_string,
-            languages=['en'],
-            settings=settings
-        )
-    except Exception as e:
-        raise ValueError(
-            f"dateparser failed to parse {datetime_string!r} "
-            f"using timezone {user_timezone!r}: {e}"
-        ) from e
+    parsed_datetime = None
 
-    if not parsed_datetime:
-        # Handle "next [day]" patterns with optional time part
-        match = re.match(r'next\s+([a-zA-Z]+)(?:\s+at\s+(.+?))?(?:\s+(morning|afternoon|evening))?$', datetime_string, re.IGNORECASE)
-        if match:
-            day_name, time_part, period = match.groups()
-            print(f"Manual parsing: day_name={day_name}, time_part={time_part}, period={period}")
-
-            day_map = {
-                'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
-                'friday': 4, 'saturday': 5, 'sunday': 6
-            }
-            if day_name.lower() not in day_map:
-                raise ValueError(f"Invalid day name: {day_name}")
-
-            target_weekday = day_map[day_name.lower()]
-            current_date = datetime.datetime.now(user_timezone)
-            current_weekday = current_date.weekday()
+    # Fast path: bare/"this"/"next" weekday names are common and dateparser
+    # gets them wrong (e.g. asking for the current day's own weekday under
+    # PREFER_DATES_FROM='future' skips today and jumps a week ahead) or slow
+    # to fail on — resolve them deterministically before dateparser is tried.
+    weekday_match = re.match(
+        r'(?:(next|this|the)\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)'
+        r'(?:\s+at\s+(.+?))?(?:\s+(morning|afternoon|evening))?$',
+        datetime_string,
+        re.IGNORECASE,
+    )
+    if weekday_match:
+        prefix, day_name, time_part, period = weekday_match.groups()
+        day_map = {
+            'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
+            'friday': 4, 'saturday': 5, 'sunday': 6
+        }
+        target_weekday = day_map[day_name.lower()]
+        current_weekday = now.weekday()
+        if prefix and prefix.lower() == 'next':
+            # "next <day>" always means a week from now, even if today matches.
             days_ahead = (target_weekday - current_weekday + 7) % 7 or 7
-            target_date = current_date + datetime.timedelta(days=days_ahead)
+        else:
+            # bare "<day>" / "this <day>" means the nearest occurrence,
+            # including today itself if today is that weekday.
+            days_ahead = (target_weekday - current_weekday) % 7
+        target_date = now + datetime.timedelta(days=days_ahead)
 
-            # Default to 9 AM if no time part or period is provided
-            default_hour = 9
-            if period:
-                period_map = {
-                    'morning': 9,
-                    'afternoon': 13,
-                    'evening': 18
-                }
-                default_hour = period_map.get(period.lower(), 9)
-                time_part = time_part or f"{default_hour}:00"
+        # Default to 9 AM if no time part or period is provided
+        default_hour = 9
+        if period:
+            period_map = {
+                'morning': 9,
+                'afternoon': 13,
+                'evening': 18
+            }
+            default_hour = period_map.get(period.lower(), 9)
+            time_part = time_part or f"{default_hour}:00"
 
-            if time_part:
-                try:
-                    time_parsed = dateutil_parser.parse(time_part, fuzzy=True)
-                    parsed_datetime = target_date.replace(
-                        hour=time_parsed.hour,
-                        minute=time_parsed.minute,
-                        second=0,
-                        microsecond=0
-                    )
-                except ValueError:
-                    raise ValueError(f"Could not parse time part: {time_part}")
-            else:
+        if time_part:
+            try:
+                time_parsed = dateutil_parser.parse(time_part, fuzzy=True)
                 parsed_datetime = target_date.replace(
-                    hour=default_hour,
-                    minute=0,
+                    hour=time_parsed.hour,
+                    minute=time_parsed.minute,
                     second=0,
                     microsecond=0
                 )
+            except ValueError:
+                parsed_datetime = None
+        else:
+            parsed_datetime = target_date.replace(
+                hour=default_hour,
+                minute=0,
+                second=0,
+                microsecond=0
+            )
 
     if not parsed_datetime:
         try:
-            # Fallback to dateutil for general parsing
-            parsed_datetime = dateutil_parser.parse(datetime_string, fuzzy=True)
-            parsed_datetime = user_timezone.localize(parsed_datetime) #since this is a pytz object with a .localized attribute
+            parsed_datetime = dateparser.parse(
+                datetime_string,
+                languages=DATEPARSER_LANGUAGES,
+                settings=settings
+            )
+        except Exception:
+            # dateparser choked on this input — fall through to dateutil below
+            # instead of failing the whole call.
+            parsed_datetime = None
+
+    if not parsed_datetime:
+        try:
+            # Fallback to dateutil for general parsing. `default` fills in any
+            # date/time parts the string doesn't specify — anchor it to the
+            # same `now` as everything else instead of dateutil's own clock.
+            parsed_datetime = dateutil_parser.parse(
+                datetime_string, fuzzy=True, default=now.replace(tzinfo=None)
+            )
+            if parsed_datetime.tzinfo is None:
+                parsed_datetime = user_timezone.localize(parsed_datetime)
         except ValueError:
             raise ValueError(f"Could not parse date/time: {datetime_string}")
 

@@ -1,8 +1,10 @@
 from google.adk.agents import LlmAgent
+from google.adk.agents.readonly_context import ReadonlyContext
 from google.genai import types
 from google.adk.agents import Agent
 from google.adk.planners import BuiltInPlanner
 from google.adk.tools import google_search, AgentTool
+import datetime
 import os
 import sys
 
@@ -28,10 +30,15 @@ search_agent_instruction = (
     "3. SCOPE VERIFICATION: Look up average durations for tasks mentioned in the user's plan "
     "to check if their timelines are mathematically or logistically feasible.\n"
     "4. NO APOLOGIES OR FILLER: Deliver concise, data-driven summaries. Highlight the "
-    "exact friction points, regulatory hurdles, or resource constraints found in your research."
+    "exact friction points, regulatory hurdles, or resource constraints found in your research.\n"
+    "5. GROUNDED SOURCES: When the topic is planning, scheduling, or productivity, prioritize "
+    "well-documented planning advice and established productivity books/frameworks (e.g. Getting "
+    "Things Done, Deep Work, Atomic Habits, and similar widely-cited works) over generic or "
+    "unsourced web content. Keep track of the exact URL for every source you use so it can be "
+    "cited and linked later."
 )
 
-consultant_agent_instruction = (
+consultant_agent_instruction_template = (
     "You are a Senior Strategic Advisor. Your core mandate is to provide a rigorous, "
     "objective, and entirely anti-sycophantic evaluation of user plans, ensuring "
     "timelines are viable before executing them via your calendar subsystem.\n\n"
@@ -55,10 +62,20 @@ consultant_agent_instruction = (
     "Remain in absolute conversational control; do not hand dialogue off to the calendar sub-agent.\n"
     "- IF THE USER SAYS NO: Do not invoke any calendar tools. Output a single, definitive "
     "termination string to yield control back to the orchestrator: '[HANDOVER_TO_ROOT]'.\n\n"
+    "STAGE 4: CITATION STAGE\n"
+    "- Based off the sources `search_agent` has searched, cite them in MLA format, 9th edition.\n"
+    "- Then, as direct evidence, list every source URL under a header titled exactly 'Links:' "
+    "(one URL per line, same order as the citations above) so the user can verify the sources "
+    "themselves. Only include sources `search_agent` actually returned — never fabricate a URL.\n\n"
     "OPERATIONAL CONTEXT:\n"
-    "- Today's date is Thursday, July 30, 2026.\n"
+    "- Today's date is {today}.\n"
     "- Ground all milestone pacing calculations starting from this date relative to the user's target."
 )
+
+
+def consultant_agent_instruction(context: ReadonlyContext) -> str:
+    today = datetime.datetime.now(datetime.timezone.utc).strftime("%A, %B %d, %Y")
+    return consultant_agent_instruction_template.format(today=today)
 
 
 search_agent = Agent(

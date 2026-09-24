@@ -144,17 +144,22 @@ class OAuthLogin:
         if 'code' not in st.query_params:
             authorization_url = self.init_google_auth()
             st.link_button(
-                "Log in",
+                "Log in with Google",
                 authorization_url
             )
             st.stop()
 
 
     def init_google_auth(self):
-        flow = Flow.from_client_secrets_file(
-            client_secrets_file=self.creds_path,
-            scopes=self.scopes,
-        )
+        try:
+            flow = Flow.from_client_secrets_file(
+                client_secrets_file=self.creds_path,
+                scopes=self.scopes,
+            )
+        except (FileNotFoundError, ValueError):
+            logging.exception("Failed to load OAuth client secrets from %s", self.creds_path)
+            st.error("Sign-in is misconfigured. Please contact the app administrator.")
+            st.stop()
         flow.redirect_uri = self.redirect_uri
 
         authorization_url, state = flow.authorization_url(
@@ -172,7 +177,11 @@ class OAuthLogin:
         return authorization_url
 
     def get_creds(self):
-        cookies = self.cookie_manager.get_all(key="oauth_get_creds")
+        try:
+            cookies = self.cookie_manager.get_all(key="oauth_get_creds")
+        except Exception:
+            logging.exception("Failed to read cookies during sign-in")
+            cookies = {}
 
         if not cookies and 'code' not in st.query_params:
             st.info("Loading secure session context...")
@@ -192,7 +201,13 @@ class OAuthLogin:
         if 'code' in st.query_params:
             code = st.query_params.get('code')
             saved_state = st.session_state.get("oauth_state") or cookies.get("oauth_state")
-            query_state = st.query_params["state"]
+            # A malformed/incomplete callback URL (code present, state missing)
+            # would otherwise raise an uncaught KeyError here.
+            query_state = st.query_params.get("state")
+            if not query_state:
+                logging.warning("OAuth callback missing 'state' query param")
+                st.error("Sign-in failed. Please try logging in again.")
+                return None
             try:
                 if saved_state == query_state: #test before starting coding requirements
                     flow = Flow.from_client_secrets_file(
@@ -257,7 +272,11 @@ def fetch_creds():
     if not user_id:
         cookie_manager = st.session_state.get("cookie_manager")
         if cookie_manager is not None:
-            cookies = cookie_manager.get_all()
+            try:
+                cookies = cookie_manager.get_all()
+            except Exception:
+                logging.exception("Failed to read cookies while fetching credentials")
+                cookies = {}
             if isinstance(cookies, dict):
                 user_id = cookies.get("user_id")
 
@@ -277,12 +296,18 @@ def get_calendar_service():
     creds = fetch_creds()
     if not creds:
         return None
-    service = build('calendar', 'v3', credentials=creds)
-    return service
+    try:
+        return build('calendar', 'v3', credentials=creds)
+    except Exception:
+        logging.exception("Failed to build the Google Calendar API client")
+        return None
 
 def get_tasks_service():
     creds = fetch_creds()
     if not creds:
         return None
-    service = build('tasks', 'v1', credentials=creds)
-    return service
+    try:
+        return build('tasks', 'v1', credentials=creds)
+    except Exception:
+        logging.exception("Failed to build the Google Tasks API client")
+        return None

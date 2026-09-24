@@ -1,10 +1,10 @@
 from google.adk.agents import LlmAgent
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from google.adk.planners import BuiltInPlanner
 from pathlib import Path
 import os
 import sys
+from google.adk.tools import AgentTool
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -57,6 +57,7 @@ When the user wants to create an event:
 - Location is optional; only include it if the user provided one.
 - If the user didn't provide a description, generate a short one from the event's title/context yourself and pass it as the `description` argument when calling `create_event`; if they did provide one, use theirs as-is.
 - If the user explicitly requests a summary, generate a summary from the event's title/context yourself and pass it as the `description` argument when calling `create_event`.
+- If the event title / description is focused, or has the title 'DEEP WORK' on it, generate a 350 word `description` focusing on how to achieve the specific goal at hand.
 - For recurring events, parse recurrence (e.g., "every Tuesday for 5 weeks") using `parse_recurrence` and pass as RRULE string.
 - For attendees, parse emails (e.g., "invite bob@example.com and alice@example.com") as list of dicts [{email: "bob@example.com"}, {email: "alice@example.com"}].
 - Call `create_event` with parsed values, including description, recurrence, and attendees if provided.
@@ -133,12 +134,6 @@ calendar_agent = LlmAgent(
     name="calendar_agent",
     description="An agent that can manage your Google Calendar events and tasks including updating, deleting, and searching for events.",
     instruction=ROOT_INSTRUCTIONS,
-    planner=BuiltInPlanner(
-                    thinking_config=types.ThinkingConfig(
-                        include_thoughts=True,
-                        thinking_budget=1024
-                    )
-                ),
     tools=[
         parse_natural_language_datetime,
         parse_recurrence,
@@ -157,3 +152,5 @@ calendar_agent = LlmAgent(
     ]
     
 )
+
+calendar_tool = AgentTool(calendar_agent)

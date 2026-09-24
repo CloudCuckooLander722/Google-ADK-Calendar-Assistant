@@ -23,10 +23,11 @@ GOOGLE_APPLICATION_CREDENTIALS at a service account key file.
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timezone
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from google.cloud import firestore
 
 _COLLECTION = os.environ.get("FIRESTORE_CREDS_COLLECTION", "users_google_creds")
@@ -63,7 +64,14 @@ def _encrypt(value: str | None) -> str | None:
 def _decrypt(value: str | None) -> str | None:
     if value is None:
         return None
-    return _fernet.decrypt(value.encode()).decode()
+    try:
+        return _fernet.decrypt(value.encode()).decode()
+    except InvalidToken:
+        # Corrupted data or the encryption key was rotated since this value
+        # was written - treat as unreadable rather than crashing every
+        # caller in the auth chain.
+        logging.error("Failed to decrypt a stored credential field; key may have rotated.")
+        return None
 
 
 def init_db():
@@ -77,6 +85,11 @@ def upsert_credentials(user_id: str, creds, email: str | None = None):
     Save (insert or update) a google.oauth2.credentials.Credentials object
     for a given user_id. Tokens are encrypted at rest.
     """
+    if not user_id:
+        raise ValueError("upsert_credentials requires a non-empty user_id.")
+    if creds is None or not getattr(creds, "token", None):
+        raise ValueError("upsert_credentials requires a Credentials object with a token.")
+
     doc = {
         "user_id": user_id,
         "email": email,
@@ -106,11 +119,19 @@ def get_credentials_dict(user_id: str) -> dict | None:
     rather than getting one back directly, to keep this module free of
     google-auth import requirements on the backend side if not needed.
     """
-    snapshot = _get_client().collection(_COLLECTION).document(user_id).get()
+    if not user_id:
+        return None
+
+    try:
+        snapshot = _get_client().collection(_COLLECTION).document(user_id).get()
+    except Exception:
+        logging.exception("Failed to read credentials from Firestore for user_id=%s", user_id)
+        return None
+
     if not snapshot.exists:
         return None
 
-    row = snapshot.to_dict()
+    row = snapshot.to_dict() or {}
     return {
         "user_id": row.get("user_id", user_id),
         "email": row.get("email"),
@@ -126,4 +147,6 @@ def get_credentials_dict(user_id: str) -> dict | None:
 
 def delete_credentials(user_id: str):
     """Use on logout / revoke."""
+    if not user_id:
+        raise ValueError("delete_credentials requires a non-empty user_id.")
     _get_client().collection(_COLLECTION).document(user_id).delete()

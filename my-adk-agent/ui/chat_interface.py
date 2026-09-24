@@ -19,6 +19,20 @@ for base in (str(PROJECT_ROOT), str(APP_ROOT)):
 from ui.fetch_timezone import fetch_timezone
 from google_oauth.oauth_login import get_calendar_service
 
+# One height for both panels so the chat box and the calendar always match.
+PANEL_HEIGHT = 620
+# Space the panel's own padding, border, input bar and gap take, so the
+# scrolling message log plus the input fit inside PANEL_HEIGHT without a
+# second scrollbar on the panel itself.
+CHAT_LOG_HEIGHT = PANEL_HEIGHT - 108
+
+# The calendar renders in its own iframe, so it can't inherit the page fonts.
+CALENDAR_CSS = """
+@import url('https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700;900&display=swap');
+.fc { font-family: 'Lato', Arial, sans-serif; }
+.fc .fc-toolbar-title { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; }
+"""
+
 
 def _google_calendar_month_events(max_results: int = 250):
     """
@@ -79,271 +93,23 @@ def run_chat_interface():
     st.markdown(
         """
         <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Lato:ital,wght@0,300;0,400;0,700;0,900;1,300;1,400;1,700;1,900&display=swap');
 
+        /* Helvetica isn't a Google Font, so it can't be loaded: it only renders
+           where installed locally (mostly Apple devices) and falls back to Arial. */
         .stApp {
             background: #f6f7f9;
+            font-family: 'Lato', Arial, sans-serif;
         }
 
-        .workflow-workspace {
-            background: #f6f7f9;
-            min-height: 88vh;
-            border-radius: 22px;
-            border: 1px solid rgba(20,33,61,0.05);
-            font-family: 'Inter', Arial, sans-serif;
-            color: #172033;
-            padding: 16px;
+        .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
         }
 
-        .workspace-topbar {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 16px;
-            padding: 6px 4px 16px;
-            border-bottom: 1px solid rgba(31,45,70,0.08);
-        }
-
-        .workspace-brand {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            color: #14213d;
-            font-weight: 900;
-            font-size: 20px;
-            letter-spacing: -0.035em;
-        }
-
-        .workspace-brand .mark {
-            width: 34px;
-            height: 34px;
-            border-radius: 50%;
-            background: #14213d;
-            color: #eefcf8;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 16px;
-        }
-
-        .workspace-nav {
-            display: flex;
-            gap: 16px;
-            align-items: center;
-            color: #56616f;
-            font-weight: 700;
-            font-size: 12px;
-        }
-
-        .workspace-nav span {
-            padding: 8px 10px;
-            border-radius: 999px;
-            background: #eef3f8;
-        }
-
-        .workspace-layout {
-            display: grid;
-            grid-template-columns: 40% 60%;
-            gap: 14px;
-            margin-top: 14px;
-        }
-
-        .chat-panel {
-            background: #ffffff;
-            border: 1px solid rgba(20,33,61,0.06);
-            border-radius: 22px;
-            box-shadow: 0 18px 50px rgba(31,45,70,0.06);
-            padding: 16px;
-            min-height: 620px;
-            display: flex;
-            flex-direction: column;
-            background-image: radial-gradient(#eef3f8 1px, transparent 1px);
-            background-size: 20px 20px;
-        }
-
-        .chat-panel-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding-bottom: 12px;
-            border-bottom: 1px solid rgba(31,45,70,0.08);
-        }
-
-        .chat-panel-header .title {
-            font-size: 17px;
-            font-weight: 900;
-            color: #14213d;
-            letter-spacing: -0.02em;
-        }
-
-        .chat-panel-header .status {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            color: #005a4b;
-            font-size: 11px;
-            font-weight: 800;
-        }
-
-        .chat-panel-header .status:before {
-            content: '';
-            width: 7px;
-            height: 7px;
-            background: #005a4b;
-            border-radius: 50%;
-        }
-
-        .chat-log {
-            flex: 1;
-            overflow: auto;
-            padding: 12px 4px 14px;
-        }
-
-        .chat-log .stChatMessage {
-            background: transparent;
-        }
-
-        .chat-input-wrap {
-            border-top: 1px solid rgba(31,45,70,0.08);
-            padding-top: 12px;
-        }
-
-        .calendar-panel {
-            background: #ffffff;
-            border-radius: 22px;
-            border: 1px solid rgba(20,33,61,0.06);
-            box-shadow: 0 18px 50px rgba(31,45,70,0.06);
-            padding: 16px;
-            min-height: 620px;
-            display: flex;
-            flex-direction: column;
-        }
-
-        .calendar-panel-head {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 2px 0 14px;
-            border-bottom: 1px solid rgba(31,45,70,0.08);
-        }
-
-        .calendar-panel-head .label {
-            color: #56616f;
-            font-size: 11px;
-            font-weight: 900;
-            letter-spacing: 0.14em;
-            text-transform: uppercase;
-        }
-
-        .calendar-panel-head .month {
-            color: #14213d;
-            font-size: 23px;
-            font-weight: 900;
-            letter-spacing: -0.035em;
-        }
-
-        .calendar-panel-head .controls {
-            display: flex;
-            gap: 8px;
-        }
-
-        .calendar-panel-head .controls button {
-            border-radius: 50%;
-            border: 1px solid rgba(20,33,61,0.14);
-            background: #fff;
-            color: #14213d;
-            width: 34px;
-            height: 34px;
-            font-size: 16px;
-            font-weight: 800;
-        }
-
-        .calendar-grid {
-            margin-top: 16px;
-            display: grid;
-            grid-template-columns: repeat(7, minmax(40px, 1fr));
-            gap: 8px;
-            color: #56616f;
-            font-size: 11px;
-            font-weight: 800;
-            text-align: center;
-        }
-
-        .calendar-grid .weekday {
-            padding-bottom: 8px;
-            color: #56616f;
-            border-bottom: 1px solid rgba(31,45,70,0.08);
-        }
-
-        .calendar-grid .day {
-            min-height: 44px;
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border: 1px solid transparent;
-            background: #f8f9fb;
-            color: #14213d;
-            font-weight: 800;
-        }
-
-        .calendar-grid .day.today {
-            background: #14213d;
-            color: #eefcf8;
-            border-radius: 50%;
-            width: 34px;
-            height: 34px;
-            margin: auto;
-            min-height: unset;
-            border: none;
-        }
-
-        .calendar-grid .day.event {
-            background: #dcefed;
-            color: #005a4b;
-            border-color: rgba(0,90,75,0.20);
-        }
-
-        .calendar-events {
-            margin-top: 16px;
-            background: #eef3f8;
-            border-radius: 18px;
-            padding: 12px;
-            border: 1px solid rgba(20,33,61,0.04);
-        }
-
-        .calendar-events .event-title {
-            font-size: 12px;
-            font-weight: 900;
-            color: #14213d;
-            text-transform: uppercase;
-            letter-spacing: 0.12em;
-            margin-bottom: 10px;
-        }
-
-        .calendar-events .event-line {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-            padding: 11px 0;
-            border-top: 1px solid rgba(31,45,70,0.08);
-            color: #56616f;
-            font-size: 12px;
-            font-weight: 700;
-        }
-
-        .calendar-events .event-line strong {
-            color: #14213d;
-        }
-
-        .calendar-events .event-line .tag {
-            padding: 5px 8px;
-            background: #14213d;
-            color: #eefcf8;
-            border-radius: 999px;
-            font-size: 10px;
-            font-weight: 800;
+        /* Streamlit's theme font (config.toml) is set directly on these text
+           elements, so the .stApp value above isn't inherited by them. */
+        .stApp p, .stApp li, .stApp td, .stApp th, .stApp blockquote, .stApp textarea {
+            font-family: 'Lato', Arial, sans-serif;
         }
         </style>
         """,
@@ -354,62 +120,48 @@ def run_chat_interface():
     adk_runner, current_session_id = initialize_adk()
     fetch_timezone()
 
-    st.markdown(
-        """
-        <div class="workflow-workspace">
-            <div class="workspace-topbar">
-                <div class="workspace-brand"><span class="mark">W</span>WorkFlow</div>
-                <div class="workspace-nav">
-                    <span>Plan</span>
-                    <span>Calendar</span>
-                    <span>Workspace</span>
-                </div>
-            </div>
-
-            <div class="workspace-layout">
-                <section class="chat-panel">
-                    <div class="chat-panel-header">
-                        <div class="title">Assistant</div>
-                        <div class="status">online</div>
-                    </div>
-                    <div class="chat-log">
-        """,
-        unsafe_allow_html=True,
-    )
-
     # Left column: actual chat panel with messages and input in 40%
     chat_col, calendar_col = st.columns([4, 6])
 
     with chat_col:
-        st.markdown("<div class='chat-panel-header'>...</div>", unsafe_allow_html=True)
-        # The visual chat panel is controlled by the HTML above; keep messages only in this actual column.
+        st.markdown("#### Assistant")
         # Initialize chat history.
         if MESSAGE_HISTORY_KEY not in st.session_state:
             st.session_state[MESSAGE_HISTORY_KEY] = []
 
-        # Display existing chat messages.
-        for message in st.session_state[MESSAGE_HISTORY_KEY]:
-            with st.chat_message(message["role"]):
-                st.markdown(message["content"])
+        # Outer panel is the same height as the calendar. Inside it, the
+        # message log scrolls and the input stays pinned beneath the log -
+        # scoped to chat only, the calendar is untouched.
+        chat_panel = st.container(height=PANEL_HEIGHT)
+        with chat_panel:
+            chat_log = st.container(height=CHAT_LOG_HEIGHT, border=False)
 
-        # Handle new user input.
-        prompt = st.chat_input("Ask your assistant to plan or schedule...")
+            with chat_log:
+                # Display existing chat messages.
+                for message in st.session_state[MESSAGE_HISTORY_KEY]:
+                    with st.chat_message(message["role"]):
+                        st.markdown(message["content"])
+
+            # Handle new user input.
+            prompt = st.chat_input("Ask WorkFlow Assistant to plan or schedule...")
+
         if prompt:
             # Append user message.
             st.session_state[MESSAGE_HISTORY_KEY].append({"role": "user", "content": prompt})
-            with st.chat_message("user"):
-                st.markdown(prompt)
+            with chat_log:
+                with st.chat_message("user"):
+                    st.write(prompt)
 
-            with st.chat_message("assistant"):
-                message_placeholder = st.empty()
-                with st.spinner("Assistant is thinking..."):
-                    agent_response = run_adk_sync(adk_runner, current_session_id, prompt)
-                    message_placeholder.markdown(agent_response)
+                with st.chat_message("assistant"):
+                    empty_response = st.empty()
+                    with st.spinner("Assistant is thinking..."):
+                        agent_response = run_adk_sync(adk_runner, current_session_id, prompt)
+                        empty_response.markdown(agent_response)
 
             st.session_state[MESSAGE_HISTORY_KEY].append({"role": "assistant", "content": agent_response})
 
     with calendar_col:
-        st.markdown("### Google Calendar")
+        st.markdown("#### Google Calendar")
         calendar_events = _google_calendar_month_events()
         st_calendar(
             events=calendar_events,
@@ -420,8 +172,9 @@ def run_chat_interface():
                     "center": "title",
                     "right": "dayGridMonth,timeGridWeek,listWeek",
                 },
-                "height": 620,
+                "height": PANEL_HEIGHT,
             },
+            custom_css=CALENDAR_CSS,
             key="google_calendar_view",
         )
         if not calendar_events:

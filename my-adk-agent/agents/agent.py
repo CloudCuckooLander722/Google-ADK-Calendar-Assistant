@@ -8,7 +8,7 @@ from google.genai import types
 
 try:
   # Use relative imports to reach sibling packages under the parent
-  from agents.calendar_agent import calendar_agent
+  from agents.calendar_agent import calendar_tool
   from agents.consultant_agent import consultant_agent
 except Exception:
   root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -16,7 +16,7 @@ except Exception:
   if root_dir not in sys.path:
       sys.path.insert(0, root_dir)
 
-  from agents.calendar_agent import calendar_agent
+  from agents.calendar_agent import calendar_tool
   from agents.consultant_agent import consultant_agent
   
   
@@ -38,14 +38,14 @@ Detection hints:
 - Commitment indicators: "please schedule", "go ahead and", "do it now", "commit", "add it", "create these".
 
 Outputs and payload:
-- Always return a structured routing payload with: `route` ("calendar_agent", "consultant_agent", "clarify", or "fallback"), `intent_summary` (1–2 sentence natural-language summary), `entities` (parsed scheduling entities when present), `confidence` (estimation), and `explanation` (short human-facing reason for the choice).
+- Always return a structured routing payload with: `route` ("calendar_agent", "consultant_agent", "clarify", or "fallback"), `intent_summary` (150 word or 10 sentence natural-language summary), `entities` (parsed scheduling entities when present), `confidence` (estimation), and `explanation` (short human-facing reason for the choice).
 
 Handling vague follow-ups:
 - If the user's message is a short follow-up that just names a sub-agent (e.g., "then inform calendar_agent", "ok ask calendar_agent", "well then check with calendar_agent") without adding new specifics, do NOT treat this as a fresh ambiguous request. Reuse the intent, timeframe, and entities already parsed from the immediately preceding unresolved request in this conversation, and forward that same fully-specified request to the named sub-agent.
 - Only fall back to a clarifying question if the ORIGINAL request itself was missing information the sub-agent needs to act (e.g., no date/time at all). A sub-agent previously reporting a capability gap is not itself a reason to re-ask the user — check first whether that capability has since been added to the sub-agent's instructions/tools before assuming it is still missing.
 
 Behavior and constraints:
-- Do not perform calendar/task mutations directly; delegate all CRUD operations to calendar_agent. If routing to consultant_agent and a commit is requested, consultant_agent may call calendar_agent via AgentTool.
+- Do not perform calendar/task mutations directly; delegate all CRUD operations to calendar_tool. If routing to consultant_agent and a commit is requested, consultant_agent may call calendar_agent via AgentTool.
 - Preserve and forward conversation context and parsed entities to the chosen sub-agent.
 - If calendar_agent reports conflicts or errors, surface a clear warning to the user rather than auto-resolving.
 - Keep interactions concise and avoid sycophancy: do not provide praise; focus on clarity and next actions.
@@ -55,7 +55,7 @@ Clarifying question templates:
 - Missing scheduling details: "What date and time should I use for '[event title]'?"
 
 Examples:
-- "Schedule a meeting with Anna next Tuesday at 10am." → route: calendar_agent.
+- "Schedule a meeting with Anna next Tuesday at 10am." → route: calendar_tool.
 - "Here's my 6-week study plan; is this realistic?" → route: consultant_agent.
 - "I want to shift my exam prep and also add study sessions—please add them." → route: consultant_agent (planning) + calendar_agent for commit (transactional subset), or return "clarify" if no explicit commit phrase.
 
@@ -73,5 +73,5 @@ root_agent = LlmAgent(
                             thinking_budget=1024
                         )),
     sub_agents=[consultant_agent.clone()],
-    tools=[AgentTool(calendar_agent)]
+    tools=[calendar_tool]
 )

@@ -23,7 +23,7 @@ def login():
     st.markdown(
         """
         <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,300..800;1,300..800&display=swap');
 
         .login-wrapper {
             min-height: 84vh;
@@ -34,7 +34,7 @@ def login():
                 radial-gradient(circle at 72% 16%, rgba(126, 222, 195, 0.13), transparent 18%),
                 radial-gradient(circle at 50% 84%, rgba(122, 119, 255, 0.12), transparent 22%),
                 linear-gradient(180deg, #eef7f6 0%, #eef3f8 100%);
-            font-family: 'Inter', Arial, sans-serif;
+            font-family: 'Open Sans', Arial, sans-serif;
             color: #172033;
         }
 
@@ -221,4 +221,5 @@ def login():
     creds = authenticator.get_creds()
     if creds is not None:
         st.session_state.logged_in = True
+        st.query_params.logged_in = "True"
    

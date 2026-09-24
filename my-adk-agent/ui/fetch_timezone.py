@@ -1,3 +1,5 @@
+import logging
+
 from streamlit_js_eval import streamlit_js_eval
 import streamlit as st
 
@@ -7,11 +9,17 @@ def fetch_timezone():
     """
     if "timezone" not in st.session_state:
         # Use streamlit_js_eval to execute JavaScript and get the timezone
-        timezone = streamlit_js_eval(
-            js_expressions="Intl.DateTimeFormat().resolvedOptions().timeZone",
-            key="i_love_gilfoyle",
-        )
+        try:
+            timezone = streamlit_js_eval(
+                js_expressions="Intl.DateTimeFormat().resolvedOptions().timeZone",
+                key="i_love_gilfoyle",
+            )
+        except Exception:
+            logging.exception("Failed to fetch the user's browser timezone")
+            timezone = None
+
         if timezone:
             st.session_state.timezone = timezone
 
         return timezone
+    return st.session_state.timezone

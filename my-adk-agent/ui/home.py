@@ -14,7 +14,7 @@ def show_home_page():
     st.markdown(
         """
         <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,300..800;1,300..800&display=swap');
 
         .workflow-about {
             min-height: 100vh;
@@ -24,7 +24,7 @@ def show_home_page():
                 radial-gradient(circle at 20% 88%, rgba(122, 119, 255, 0.11), transparent 20%),
                 linear-gradient(180deg, #eef7f6 0%, #eef3f8 100%);
             color: #172033;
-            font-family: 'Inter', Arial, sans-serif;
+            font-family: 'Open Sans', Arial, sans-serif;
         }
 
         .workflow-about-wrap {
@@ -46,7 +46,7 @@ def show_home_page():
             font-size: clamp(52px, 6vw, 88px);
             line-height: 0.96;
             letter-spacing: -0.052em;
-            font-family: 'Space Grotesk', 'Inter', Arial, sans-serif;
+            font-family: 'Open Sans', Arial, sans-serif;
             color: #14213d;
             margin: 0 0 24px;
         }

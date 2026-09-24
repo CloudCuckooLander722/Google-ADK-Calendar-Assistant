@@ -19,6 +19,9 @@ def resolve_address(place_or_address: str) -> str:
         The best-matching formatted address, or a message saying none
         was found.
     """
+    if not isinstance(place_or_address, str) or not place_or_address.strip():
+        raise ValueError("place_or_address is required to resolve an address.")
+
     api_key = os.environ.get("GOOGLE_MAPS_API_KEY")
     if not api_key:
         raise ValueError(
@@ -34,7 +37,9 @@ def resolve_address(place_or_address: str) -> str:
             f"Failed to resolve address '{place_or_address}': {error}"
         ) from error
 
-    if data.get("status") != "OK" or not data.get("results"):
+    results = data.get("results") or []
+    if data.get("status") != "OK" or not results:
         return f"Could not resolve '{place_or_address}' to a real address."
 
-    return data["results"][0]["formatted_address"]
+    formatted_address = results[0].get("formatted_address")
+    return formatted_address or f"Could not resolve '{place_or_address}' to a real address."

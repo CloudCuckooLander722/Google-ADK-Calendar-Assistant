@@ -3,3 +3,7 @@ address = "0.0.0.0"
 headless = true
 enableCORS = false
 enableXsrfProtection = false
+enableStaticServing = true
+
+[theme]
+font = "Open Sans:https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,300..800;1,300..800&display=swap"

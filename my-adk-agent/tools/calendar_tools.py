@@ -94,6 +94,9 @@ def parse_natural_language_datetime(datetime_string: str, duration: Optional[str
         Tuple of (start_datetime, end_datetime, time_window) in ISO 8601 local time and
         optional (start_time, end_time) as "HH:MM" strings (JSON-serializable for tool calls).
     """
+    if not isinstance(datetime_string, str) or not datetime_string.strip():
+        raise ValueError(f"Could not parse date/time: {datetime_string!r}")
+
     timezone_value = get_user_timezone()
     user_timezone = (
         pytz.timezone(timezone_value)
@@ -255,6 +258,9 @@ def parse_duration(duration: str) -> int:
     Raises:
         ValueError: If duration cannot be parsed.
     """
+    if not isinstance(duration, str) or not duration.strip():
+        raise ValueError(f"Could not parse duration: {duration!r}")
+
     duration_match = re.match(r'(?:for\s+)?(\d+)\s*(hour|hours|minute|minutes)', duration, re.IGNORECASE)
     if duration_match:
         value, unit = duration_match.groups()
@@ -306,6 +312,9 @@ def _tasks_service():
 
 
 def _calendar_time_field(value: str) -> Dict[str, str]:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Invalid calendar datetime: {value!r}")
+
     try:
         date_value = datetime.date.fromisoformat(value)
     except ValueError:
@@ -334,6 +343,11 @@ def create_event(
     attendees: Optional[List[Dict[str, str]]] = None,
     calendar_id: str = "primary",
 ):
+    if not summary or not summary.strip():
+        raise ValueError("Event summary/title is required.")
+    if not calendar_id or not calendar_id.strip():
+        raise ValueError("calendar_id is required.")
+
     service = _calendar_service() #save edits for tommorow
     event = {
         "summary": summary,
@@ -369,6 +383,9 @@ def parse_recurrence(recurrence_string: str) -> str:
     Raises:
         ValueError: If recurrence cannot be parsed.
     """
+    if not isinstance(recurrence_string, str) or not recurrence_string.strip():
+        raise ValueError(f"Could not parse recurrence: {recurrence_string!r}")
+
     # Basic parsing for common patterns
     match = re.match(r'every\s+(\w+)\s*(for\s+(\d+)\s*(week|month|year)s?)?', recurrence_string, re.IGNORECASE)
     if match:
@@ -393,6 +410,11 @@ def parse_recurrence(recurrence_string: str) -> str:
     raise ValueError(f"Could not parse recurrence: {recurrence_string}")
 
 def get_event(event_id: str, calendar_id: str,) -> Dict:
+    if not event_id or not event_id.strip():
+        raise ValueError("event_id is required.")
+    if not calendar_id or not calendar_id.strip():
+        raise ValueError("calendar_id is required.")
+
     service = _calendar_service()
     try:
         event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
@@ -412,6 +434,9 @@ def update_event(
     calendar_id: str = "primary",
     send_updates: str = "none" # "all", "externalOnly", or "none"
 ) -> str:
+    if not event_id or not event_id.strip():
+        raise ValueError("event_id is required.")
+
     service = _calendar_service()
     update_body = {}
 
@@ -446,6 +471,9 @@ def update_event(
         raise ValueError(f"Failed to update event: {str(error)}")
 
 def delete_event(event_id: str, calendar_id: str = "primary", send_updates: str = "none") -> str:
+    if not event_id or not event_id.strip():
+        raise ValueError("event_id is required.")
+
     service = _calendar_service()
     try:
         service.events().delete(
@@ -461,6 +489,8 @@ def delete_event(event_id: str, calendar_id: str = "primary", send_updates: str 
 def _task_due_value(due: Optional[str]) -> Optional[str]:
     if due is None:
         return None
+    if not isinstance(due, str) or not due.strip():
+        raise ValueError(f"Invalid task due datetime: {due!r}")
 
     user_tz = pytz.timezone(get_user_timezone())
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", due):
@@ -485,8 +515,11 @@ def create_task(
     title: str,
     notes: str = "",
     due: Optional[str] = None,
-    task_list_id: str = "@default"
+    task_list_id: str = "@default",
 ) -> str:
+    if not title or not title.strip():
+        raise ValueError("Task title is required.")
+
     service = _tasks_service()
     body = {"title": title}
     if notes:
@@ -509,6 +542,9 @@ def patch_task(
     status: Optional[str] = None,
     task_list_id: str = "@default"
 ) -> str:
+    if not task_id or not task_id.strip():
+        raise ValueError("task_id is required.")
+
     service = _tasks_service()
     body = {}
     if title is not None:
@@ -534,6 +570,9 @@ def patch_task(
 
 
 def delete_task(task_id: str, task_list_id: str = "@default") -> str:
+    if not task_id or not task_id.strip():
+        raise ValueError("task_id is required.")
+
     service = _tasks_service()
     try:
         service.tasks().delete(tasklist=task_list_id, task=task_id).execute()
@@ -608,7 +647,8 @@ def search_events(
                 formatted_time = local_time.strftime("%Y-%m-%d %I:%M %p %Z")
             else: # All-day event
                 formatted_time = start
-            formatted_events.append(f"{formatted_time} - {event['summary']} - ID: {event['id']}")
+            summary = event.get('summary') or "Untitled event"
+            formatted_events.append(f"{formatted_time} - {summary} - ID: {event.get('id')}")
         return formatted_events
     except HttpError as error:
         raise ValueError(f"Failed to search events: {str(error)}")
@@ -637,6 +677,10 @@ def suggest_meeting_times(
     Returns:
         List of formatted time slots in local time zone (e.g., "2025-09-23 10:00 AM IST").
     """
+    # duration is Optional so callers can pass None explicitly; parse_duration
+    # requires a string, so normalize before it's used anywhere below.
+    duration = duration or "1 hour"
+
     service = _calendar_service()
     user_timezone = get_user_timezone()
     user_tz = pytz.timezone(user_timezone)

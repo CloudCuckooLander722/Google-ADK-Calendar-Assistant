@@ -18,6 +18,8 @@ except Exception as e:
 
     from agents.calendar_agent import calendar_agent
 
+from agents.tool_errors import report_tool_error
+
 
 search_agent_instruction = (
     "You are a hyper-focused Research Specialist. Your sole objective is to provide "
@@ -78,6 +80,14 @@ consultant_agent_instruction_template = (
     "Stage 2 revision, make one separate `calendar_tool` call to schedule that milestone as its "
     "own calendar event, using that milestone's title and target date - one call per milestone, "
     "never batched together, never skipped.\n"
+    "- Each milestone is a 'block', and a block is either an event or a task: ask "
+    "`calendar_tool` for an event when the milestone has a time or time range, and for a task "
+    "when it is a deadline with only a target date. When the user says 'block', they always "
+    "mean an event or a task.\n"
+    "- If a `calendar_tool` call fails or returns an error (a result with \"status\": \"error\", "
+    "or a reply saying something could not be created), keep scheduling the remaining "
+    "milestones. When done, list every milestone as scheduled or failed; for each failure, name "
+    "the milestone and its date, the step that failed, and the error in plain words.\n"
     "- Remain in absolute conversational control while doing this: you are invoking "
     "`calendar_tool` to perform an action, not handing the conversation off to it.\n"
     "- IF THE USER SAYS NO: Do not invoke any calendar tools. Output a single, definitive "
@@ -120,6 +130,7 @@ consultant_agent = LlmAgent(
                         )
                     ),
     instruction=consultant_agent_instruction,
-    tools=[search_tool, calendar_tool]
+    tools=[search_tool, calendar_tool],
+    on_tool_error_callback=report_tool_error,
     
 )

@@ -332,3 +332,183 @@ return a clear success result after the API confirms deletion.
 - [ ] Deleting an event or task with an unknown ID returns a clear failure.
 - [ ] A missing or expired credential produces a re-authentication path,
 	rather than an API call with invalid credentials.
+
+## 8. `chat_interface` Requirements
+
+Status: **Tentative.** This section covers the chat panel in
+`ui/chat_interface.py`: text prompts, and the extra input types a user can add
+to a prompt (image files, Google Docs, and speech). Every input type is
+converted into `google.genai.types.Part` objects, and all parts for one turn
+are put into a single `types.Content` before it is passed to `run_adk_sync()`.
+Each requirement is stated so it can be checked by a test or by observing the
+running app. Requirements marked *(planned)* are not built yet.
+
+### 8.1 Layout
+
+- **CI-1** The chat panel must be split into two columns, `add_col` and
+	`prompt_col`, in a 1:9 width ratio.
+- **CI-2** `prompt_col` must hold the message history and the text prompt
+	input.
+- **CI-3** `add_col` must hold the input controls: an image upload control, a
+	Google Doc control, and a microphone control.
+- **CI-4** The chat panel must stay beside the calendar panel at the existing
+	40/60 split; adding `add_col` must not change the calendar's width.
+
+### 8.2 Supported Input Types
+
+| Input type | Source in the UI | Converted to | `Part` constructor |
+|---|---|---|---|
+| Text | `st.chat_input` | The prompt text | `types.Part(text=...)` |
+| Image (`.jpg`, `.jpeg`, `.png`, `.webp`) | `st.file_uploader` in `add_col` | Raw bytes plus MIME type | `types.Part.from_bytes(data=..., mime_type=...)` |
+| Google Doc | Doc URL or ID entered in `add_col` | Plain text exported through the Drive API | `types.Part(text=...)` |
+| Speech | `streamlit_mic_recorder.mic_recorder` in `add_col` | A text transcript (default) or raw audio | `types.Part(text=...)` or `types.Part.from_bytes(data=..., mime_type="audio/wav")` |
+
+- **CI-5** Each input type must have exactly one converter function that
+	takes the raw input and returns `list[types.Part]`. Converters must not
+	call the agent, and must not read or write Streamlit session state.
+- **CI-6** Converters must live outside the UI, in `services/` (for example
+	`services/input_parts.py`, with the speech converter in
+	`services/speech_to_text.py`), so they can be tested without Streamlit.
+- **CI-7** A converter that cannot produce a part (bad file, unreadable doc,
+	no speech found) must raise an error with a message the user can read. It
+	must not return an empty or partial list without saying why.
+
+### 8.3 Text Prompt Input
+
+- **CI-8** `prompt_col` must accept a free-text prompt through a single chat
+	input.
+- **CI-9** A prompt that is empty or only whitespace must not be sent to the
+	agent, unless at least one attachment is pending (see CI-27).
+- **CI-10** A submitted prompt must be shown in the history as a `user`
+	message before the agent is called.
+- **CI-11** The agent's reply must be shown as an `assistant` message and
+	stored in the history, so the conversation survives a Streamlit rerun.
+
+### 8.4 Image Input *(planned)*
+
+- **CI-12** The image control must accept `.jpg`, `.jpeg`, `.png`, and `.webp`
+	files. Other file types must be rejected with a visible message.
+- **CI-13** The MIME type must be set from the file's content or extension
+	(`image/jpeg`, `image/png`, `image/webp`), never left blank. `.jpg` and
+	`.jpeg` both map to `image/jpeg`.
+- **CI-14** An image larger than the configured size limit must be rejected
+	before it is sent. The limit must keep the whole request under Gemini's
+	inline-data limit (about 20 MB per request).
+- **CI-15** The user must be able to see which images are attached, and to
+	remove any of them, before sending.
+
+### 8.5 Google Docs Input *(planned)*
+
+- **CI-16** The Google Doc control must accept a Doc URL
+	(`https://docs.google.com/document/d/<id>/...`) or a bare document ID, and
+	extract the ID from it. Any other input must be rejected with a visible
+	message.
+- **CI-17** The Doc must be read as the signed-in user, using credentials from
+	`credentials_store.get_valid_credentials(user_id)` (Section 2.3). The UI
+	must not build its own credentials.
+- **CI-18** The Doc must be exported as `text/plain` through the Drive API
+	(`files().export`). This requires a Drive read scope
+	(`drive.readonly`) to be added to the OAuth scope set in Section 7.5, and
+	existing users must be sent through consent again to grant it.
+- **CI-19** The exported text must be wrapped with the Doc's title, for
+	example `"[Google Doc: <title>]\n<text>"`, so the agent can tell it apart
+	from the user's own prompt.
+- **CI-20** A Doc the user cannot open (not found, no access, or not a Google
+	Doc) must produce a clear error message, not an empty part.
+- **CI-21** Exported text longer than the configured limit must be cut to the
+	limit, and the part must say that it was cut.
+
+### 8.6 Speech-to-Text Input *(planned)*
+
+- **CI-22** The microphone control must record audio through
+	`streamlit_mic_recorder.mic_recorder`, with visible start and stop states.
+- **CI-23** By default, a finished recording must be transcribed to text in
+	`services/speech_to_text.py` (for example with the `SpeechRecognition`
+	package already in `requirements.txt`), and sent as a text `Part`. The
+	audio must be in a format the recognizer accepts (WAV, AIFF, or FLAC); if
+	the recorder returns another format, it must be converted first.
+- **CI-24** The transcript must be shown to the user before it is sent, so a
+	wrong transcription can be fixed or discarded.
+- **CI-25** If the microphone is unavailable, permission is denied, or no
+	speech is recognized, the app must show a clear message; the text prompt
+	must keep working.
+- **CI-26** `LIVE_AGENT_RUN_CONFIG` (BIDI streaming, audio replies) must only
+	be used by a future live-voice path. It must not be passed to the
+	single-turn `run_adk_sync()` path described here.
+
+### 8.7 Message Construction and Dispatch
+
+The flow for one turn is:
+
+```
+text prompt ─────┐
+image files ─────┤  converters (CI-5)   list[types.Part]   build_user_content()
+Google Doc ──────┼────────────────────►  one list per ───►  types.Content(role="user", parts=[...])
+speech clip ─────┘                       input                        │
+                                                                      ▼
+                                          run_adk_sync(runner, session_id, content)
+```
+
+- **CI-27** All parts for one turn must be combined into one
+	`types.Content` with `role="user"`. The order must be: the text prompt
+	(or transcript) first, then Google Doc text, then images, in the order the
+	user added them.
+- **CI-28** A single function (for example `build_user_content(text,
+	attachments) -> types.Content`) must build this object. The UI must call
+	it, and must not construct `Content` inline.
+- **CI-29** That `Content` must be passed to `run_adk_sync()`. The UI must
+	not call the ADK runner directly.
+- **CI-30** `run_adk_sync()` and `run_adk_async()` must accept either a
+	`types.Content` or a `str`. A `str` must be wrapped into a text-only
+	`Content`, so existing callers keep working. The empty-message check in
+	`run_adk_async()` must look at all parts, not only at text.
+- **CI-31** A turn with no text and no attachments must not be sent.
+- **CI-32** Attachments must be sent with exactly one turn and then cleared.
+	They must not be sent again with later prompts.
+- **CI-33** The chat history must store a short label for each attachment
+	(for example `📎 photo.jpg` or `📄 Meeting notes (Google Doc)`), not the raw
+	bytes or the full Doc text.
+
+### 8.8 Error Handling
+
+- **CI-34** Any failure while recording, transcribing, reading a Doc,
+	attaching an image, or calling the agent must appear as an assistant
+	message in the chat. It must never crash the page.
+- **CI-35** A failed turn must not leave a half-built message or a stale
+	attachment in session state.
+
+### 8.9 Open Issues
+
+- Decide whether speech is always transcribed (CI-23), or can also be sent to
+	Gemini as a raw audio `Part`. Raw audio keeps tone and avoids transcription
+	errors, but the user cannot check it before sending.
+- `drive.readonly` is a restricted scope and needs Google verification for a
+	public app. `drive.file` with the Google Picker avoids this, but only gives
+	access to files the user picks.
+- Decide whether the assistant replies to voice input with text, audio, or
+	both. Audio replies need the live (BIDI) path in CI-26.
+- Pasted clipboard images and screen captures are not covered; CI-12 to CI-15
+	assume an uploaded file.
+- Other Google file types (Sheets, Slides) and PDFs are out of scope for now.
+
+### 8.10 Verification Checklist
+
+- [ ] The chat panel shows `add_col` and `prompt_col` side by side at 1:9,
+	and the calendar panel keeps its width.
+- [ ] Submitting `"   "` with no attachments sends nothing to the agent.
+- [ ] A text prompt appears as a user message, gets a reply, and both are
+	still there after a rerun.
+- [ ] A `.jpg` attached with a prompt reaches `run_adk_sync()` as a second
+	`Part` with `mime_type="image/jpeg"` in the same `Content`, and is gone
+	before the next prompt.
+- [ ] Attaching a `.pdf` or `.txt` file is rejected with a visible message.
+- [ ] A Google Doc URL produces a text `Part` that starts with the Doc's title.
+- [ ] A Doc the user has no access to shows an error, and nothing is sent.
+- [ ] A recorded voice clip shows a transcript, and the transcript is sent as
+	a text `Part` that the agent answers.
+- [ ] Denying microphone permission shows a message, and typing still works.
+- [ ] Calling `run_adk_sync()` with a plain `str` still works.
+- [ ] Forcing `run_adk_sync()` to raise shows an error reply in the chat and
+	leaves the page usable.
+
+#Note: Also use @st for stuff?

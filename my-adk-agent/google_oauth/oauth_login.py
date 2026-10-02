@@ -21,6 +21,7 @@ from google.auth.transport import requests as google_requests
 from google_oauth import creds_db
 from google_oauth.credentials_store import get_valid_credentials
 import logging
+from typing import Optional
 from googleapiclient.discovery import build
 
 _ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
@@ -266,6 +267,30 @@ class OAuthLogin:
 
         return None
 
+def restore_signed_in_user() -> Optional[str]:
+    """
+    Puts the signed-in user's id back into st.session_state after a browser
+    refresh, from the `user_id` cookie set at sign-in.
+
+    A refresh starts a new Streamlit session, so session_state is empty and only
+    the login page would otherwise create the cookie manager. Call this near the
+    top of every signed-in page (not from inside agent tools: it renders the
+    cookie component). The browser sends cookies on the component's first
+    render, which triggers one automatic rerun, so this can return None on the
+    very first run after a refresh and the id on the next.
+    """
+    user_id = st.session_state.get("user_id")
+    if user_id:
+        return user_id
+    try:
+        cookies = get_cookie_manager().get_all(key="restore_user_id")
+    except Exception:
+        logging.exception("Failed to read cookies while restoring the signed-in user")
+        return None
+    if isinstance(cookies, dict) and cookies.get("user_id"):
+        st.session_state["user_id"] = str(cookies["user_id"])
+    return st.session_state.get("user_id")
+
 def fetch_creds():
     user_id = st.session_state.get("user_id") or st.query_params.get("user_id")
 
@@ -287,8 +312,10 @@ def fetch_creds():
     st.session_state["user_id"] = user_id
 
     creds = get_valid_credentials(user_id)
+    # Only drop user_id from the URL: clearing every param would also remove
+    # logged_in, and the next refresh would land on the login page.
     if "user_id" in st.query_params:
-        st.query_params.clear()
+        del st.query_params["user_id"]
 
     return creds
 

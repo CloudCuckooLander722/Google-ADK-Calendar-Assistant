@@ -225,16 +225,15 @@ def parse_natural_language_datetime(datetime_string: str, duration: Optional[str
     parsed_datetime = parsed_datetime.astimezone(user_timezone) #change
     start_datetime = parsed_datetime.isoformat()
 
-    if duration:
-        duration_minutes = parse_duration(duration)
-        end_datetime = (parsed_datetime + datetime.timedelta(minutes=duration_minutes)).isoformat()
-    else:
-        end_datetime = (parsed_datetime + datetime.timedelta(hours=1)).isoformat()
+    duration_minutes = parse_duration(duration) if duration else 60
+    end_datetime = (parsed_datetime + datetime.timedelta(minutes=duration_minutes)).isoformat()
 
     if not has_explicit_time(datetime_string) and not time_preference:
         date = parsed_datetime.astimezone(user_timezone).date()
         start_datetime = date.isoformat()
-        end_datetime = (date + datetime.timedelta(days=1)).isoformat()
+        # All-day: span whole days (at least one), so "for 3 days" covers 3 dates.
+        days = max(1, -(-duration_minutes // (24 * 60))) if duration else 1
+        end_datetime = (date + datetime.timedelta(days=days)).isoformat()
         time_window = (datetime.time(0, 0), datetime.time(23, 59))
 
     serialized_time_window = (
@@ -245,27 +244,37 @@ def parse_natural_language_datetime(datetime_string: str, duration: Optional[str
 
     return str(start_datetime), str(end_datetime), serialized_time_window
 
+# Minutes per duration unit, keyed by the unit's first letter.
+DURATION_UNIT_MINUTES = {"w": 7 * 24 * 60, "d": 24 * 60, "h": 60, "m": 1}
+
 def parse_duration(duration: str) -> int:
     """
     Parse a duration string into minutes.
-    
+
     Args:
-        duration: Duration string (e.g., "30 minutes", "for 1 hour").
-    
+        duration: Duration string (e.g., "30 minutes", "for 1 hour", "1.5 hrs",
+            "1 hour 30 minutes", "1 day", "2 weeks", "half an hour").
+
     Returns:
         Duration in minutes.
-    
+
     Raises:
         ValueError: If duration cannot be parsed.
     """
     if not isinstance(duration, str) or not duration.strip():
         raise ValueError(f"Could not parse duration: {duration!r}")
 
-    duration_match = re.match(r'(?:for\s+)?(\d+)\s*(hour|hours|minute|minutes)', duration, re.IGNORECASE)
-    if duration_match:
-        value, unit = duration_match.groups()
-        value = int(value)
-        return value * 60 if unit.lower().startswith('hour') else value
+    text = duration.lower()
+    text = re.sub(r'\bhalf an?\b', '0.5', text)
+    text = re.sub(r'\ban?\b', '1', text)  # "an hour", "a day"
+    # Sum every "<number> <unit>" pair, so "1 hour 30 minutes" is 90.
+    total = 0.0
+    found = False
+    for value, unit in re.findall(r'(\d+(?:\.\d+)?)\s*(weeks?|w|days?|d|hours?|hrs?|h|minutes?|mins?|m)\b', text):
+        found = True
+        total += float(value) * DURATION_UNIT_MINUTES[unit[0]]
+    if found and total > 0:
+        return round(total)
     raise ValueError(f"Could not parse duration: {duration}")
 
 

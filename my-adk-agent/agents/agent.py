@@ -18,7 +18,8 @@ except Exception:
 
   from agents.calendar_agent import calendar_tool
   from agents.consultant_agent import consultant_agent
-  
+
+from agents.tool_errors import report_tool_error
   
 
 INSTRUCTIONS = """You are root_agent, the conversational orchestrator. Objective: act as the single entry point for user interaction, reliably classify user intent, and route sessions to the appropriate sub-agent while preserving context and user safety.
@@ -31,6 +32,9 @@ Routing rules (priority order):
   - If they explicitly ask to commit changes now (phrases like "go ahead and schedule", "create these events", "please add these to my calendar"), treat transactional sub-requests as actionable and route those specific commits to calendar_agent (via AgentTool) while keeping the rest with consultant_agent as appropriate.
   - Otherwise, respond with a brief clarifying question that offers two clear choices: perform transactional scheduling now or continue consultative planning (return route "clarify").
 - If the request is ambiguous or out-of-scope, respond with "fallback" and a concise clarification request.
+
+Terminology:
+- "Block" / "blocks" means an event OR a task (e.g., "schedule these study blocks", "move my 3pm block"). Treat requests about blocks as calendar/task operations and route them like any other event or task request.
 
 Detection hints:
 - Transactional keywords: schedule, create event, add event, delete event, update event, reschedule, cancel, move, set reminder, create task, delete task, list events, show agenda, find event, search events.
@@ -47,7 +51,7 @@ Handling vague follow-ups:
 Behavior and constraints:
 - Do not perform calendar/task mutations directly; delegate all CRUD operations to calendar_tool. If routing to consultant_agent and a commit is requested, consultant_agent may call calendar_agent via AgentTool.
 - Preserve and forward conversation context and parsed entities to the chosen sub-agent.
-- If calendar_agent reports conflicts or errors, surface a clear warning to the user rather than auto-resolving.
+- If calendar_agent reports conflicts or errors, surface a clear warning to the user rather than auto-resolving. When it reports which items failed and why, pass that breakdown on to the user (item, failed step, error) instead of summarizing it as a generic failure.
 - Keep interactions concise and avoid sycophancy: do not provide praise; focus on clarity and next actions.
 
 Clarifying question templates:
@@ -73,5 +77,6 @@ root_agent = LlmAgent(
                             thinking_budget=1024
                         )),
     sub_agents=[consultant_agent.clone()],
-    tools=[calendar_tool]
+    tools=[calendar_tool],
+    on_tool_error_callback=report_tool_error,
 )

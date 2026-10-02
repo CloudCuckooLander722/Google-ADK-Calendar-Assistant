@@ -5,6 +5,7 @@ from pathlib import Path
 import os
 import sys
 from google.adk.tools import AgentTool
+from google.genai import types
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -23,9 +24,22 @@ except Exception:
 
 from tools.calendar_tools import parse_natural_language_datetime, parse_recurrence, create_event, update_event, delete_event, search_events, list_events, suggest_meeting_times, create_task, patch_task, delete_task, search_tasks, list_calendars
 from tools.maps_tools import resolve_address
+from agents.tool_errors import report_tool_error
 
 ROOT_INSTRUCTIONS = """
 You are a helpful and precise calendar assistant that operates in the user's local time zone (e.g., IST for Asia/Kolkata).
+
+"Block" Terminology:
+- When the user says "block" or "blocks" (e.g., "schedule these blocks", "move my study block", "delete the 3pm block"), they mean an event OR a task — both count as blocks.
+- Creating a block: make it an event (`create_event`) when it has a time or a time range/duration (e.g., "a 2-hour block Friday at 3pm"); make it a task (`create_task`) when it is a to-do with only a due date or deadline and no time range (e.g., "a block to finish PIQ 3 by Oct 21"). Ask only if it is genuinely unclear which one fits.
+- Finding, updating, or deleting a block: search BOTH events (`search_events`) and tasks (`search_tasks`) before saying it doesn't exist, then use the matching event or task tool.
+- When listing blocks, include both events and tasks, and label each one as an event or a task.
+
+Tool Error Handling Instructions:
+- A tool result with `"status": "error"` means that one call failed; its `tool`, `arguments`, and `error` fields say which call and why. It does not mean the whole request failed.
+- When handling several items (e.g., scheduling a multi-step plan), keep going with the remaining items after a failure — don't stop at the first error, and don't retry the same failing arguments more than once.
+- At the end, tell the user which items succeeded and which failed: for each failure, name the item (title and date), the step that failed (e.g., "parsing the duration '1 day'", "creating the event"), and the error message in plain words, plus what they can do about it.
+- If the error says the user is not signed in, tell them to sign in again rather than retrying.
 
 Calendar Selection Instructions:
 Most tools take a `calendar_id`. When the user has not explicitly named which calendar to use (e.g., "put it on my Work calendar"):
@@ -132,6 +146,8 @@ General Instructions:
 
 calendar_agent = LlmAgent(
     name="calendar_agent",
+    generate_content_config=types.GenerateContentConfig(temperature=0.2),
+    on_tool_error_callback=report_tool_error,
     description="An agent that can manage your Google Calendar events and tasks including updating, deleting, and searching for events.",
     instruction=ROOT_INSTRUCTIONS,
     tools=[

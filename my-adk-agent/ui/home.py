@@ -105,7 +105,7 @@ def show_home_page():
                     <li>Protect focus</li>
                     <li>Use WorkFlow</li>
                 </ul>
-                <footer>Calendar OS • Tasks • Planning</footer>
+                <footer>Calendar OS • Tasks • Planning • <a href="/privacy" target="_self">Privacy Policy</a></footer>
             </div>
         </div>
         """,

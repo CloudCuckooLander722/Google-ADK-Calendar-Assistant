@@ -14,6 +14,7 @@ import extra_streamlit_components as stx
 from ui.chat_interface import run_chat_interface
 from ui.login import login
 from ui.home import show_home_page
+from ui.privacy import show_privacy_page
 
 def main():
     """
@@ -29,15 +30,20 @@ def main():
     login_page = st.Page(login, title="Login", icon="🔑")
     home_page = st.Page(show_home_page, title="Home", icon="🏠")
     chat_interface_page = st.Page(run_chat_interface, title="Chat Interface", icon="💬")
+    # Public at /privacy whether or not the visitor is signed in: Google's OAuth
+    # verification requires a privacy policy reachable without signing in.
+    privacy_page = st.Page(show_privacy_page, title="Privacy Policy", icon="🔒", url_path="privacy")
 
     if st.session_state.logged_in or st.query_params.logged_in == "True":
         pg = st.navigation({
-            "Chat Interface": [chat_interface_page]
+            "Chat Interface": [chat_interface_page],
+            "About": [privacy_page],
         })
     else:
         pg = st.navigation({
             "Login": [login_page],
-            "Home": [home_page]
+            "Home": [home_page],
+            "About": [privacy_page],
         })
 
     pg.run()

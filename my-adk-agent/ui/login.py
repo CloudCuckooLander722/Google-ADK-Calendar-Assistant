@@ -208,7 +208,7 @@ def login():
                     <h2>Welcome back</h2>
                     <p>Connect your Google Workspace to begin planning your calendar and task system.</p>
                     <div class="login-button-wrapper"></div>
-                    <div class="terms">Secure sign-in with Google OAuth</div>
+                    <div class="terms">Secure sign-in with Google OAuth · <a href="/privacy" target="_self">Privacy Policy</a></div>
                 </section>
             </div>
         </div>

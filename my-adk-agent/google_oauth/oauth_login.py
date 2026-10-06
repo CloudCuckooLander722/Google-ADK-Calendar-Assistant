@@ -21,6 +21,7 @@ from google.auth.transport import requests as google_requests
 from google_oauth import creds_db
 from google_oauth.credentials_store import get_valid_credentials
 import logging
+import requests
 from typing import Optional
 from googleapiclient.discovery import build
 
@@ -338,3 +339,38 @@ def get_tasks_service():
     except Exception:
         logging.exception("Failed to build the Google Tasks API client")
         return None
+def delete_my_data(user_id: str) -> None:
+    """
+    Disconnects a user from WorkFlow: revokes the app's access at Google, deletes
+    their stored (encrypted) tokens from Firestore, and signs them out of this
+    browser. Raises if the stored tokens could not be deleted.
+    """
+    stored = creds_db.get_credentials_dict(user_id)
+    token = stored and (stored.get("refresh_token") or stored.get("token"))
+    if token:
+        try:
+            # Revoking either token revokes the whole grant for this app.
+            requests.post(
+                "https://oauth2.googleapis.com/revoke",
+                params={"token": token},
+                headers={"content-type": "application/x-www-form-urlencoded"},
+                timeout=10,
+            )
+        except Exception:
+            # Still delete our copy; the user can also revoke at
+            # https://myaccount.google.com/permissions.
+            logging.exception("Failed to revoke Google access for user_id=%s", user_id)
+
+    creds_db.delete_credentials(user_id)
+
+    cookie_manager = get_cookie_manager()
+    for cookie in ("user_id", "logged_in"):
+        try:
+            cookie_manager.delete(cookie, key=f"delete_{cookie}")
+        except Exception:
+            # Harmless if the cookie is already gone: with the stored tokens
+            # deleted, a leftover user_id cookie no longer signs anyone in.
+            logging.exception("Failed to delete the %s cookie", cookie)
+    st.session_state.pop("user_id", None)
+    st.session_state.logged_in = False
+    st.query_params.logged_in = "False"

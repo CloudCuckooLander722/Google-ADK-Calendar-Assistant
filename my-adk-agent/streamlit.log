@@ -1,31 +1,58 @@
 
 Collecting usage statistics. To deactivate, set browser.gatherUsageStats to false.
 
-2026-08-18 00:15:45.757 Uvicorn server started on :::8501
+2026-09-26 21:36:59.933 Uvicorn server started on 0.0.0.0:8501
+WARNING: Static file serving is enabled, but no static folder found at /workspaces/Google-ADK-Calendar-Assistant/my-adk-agent/static. To disable static file serving, set server.enableStaticServing to false.
 
   You can now view your Streamlit app in your browser.
 
   Local URL: http://localhost:8501
-  Network URL: http://10.0.0.243:8501
-  External URL: http://20.171.127.65:8501
+  Network URL: http://10.0.0.73:8501
+  External URL: http://20.163.40.129:8501
 
-2026-08-18 00:16:10.323 Uncaught app execution
+2026-09-26 21:37:25.447 Uncaught app execution
 Traceback (most recent call last):
   File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/streamlit/runtime/scriptrunner/exec_code.py", line 136, in exec_func_with_error_handling
     result = func()
              ^^^^^^
-  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 816, in code_to_exec
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 827, in code_to_exec
     exec(code, module.__dict__)  # noqa: S102
     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/workspaces/Google-ADK-Calendar-Assistant/my-adk-agent/ui/streamlit_ui.py", line 105, in <module>
-    run_streamlit_app()
-  File "/workspaces/Google-ADK-Calendar-Assistant/my-adk-agent/ui/streamlit_ui.py", line 46, in run_streamlit_app
-    authenticate_login()
-  File "/workspaces/Google-ADK-Calendar-Assistant/my-adk-agent/ui/streamlit_ui.py", line 34, in authenticate_login
-    st.session_state["authenticator"].check_authentification()
-  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/streamlit_google_auth/__init__.py", line 86, in check_authentification
-    flow.fetch_token(code=auth_code)
-  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/google_auth_oauthlib/flow.py", line 285, in fetch_token
+  File "/workspaces/Google-ADK-Calendar-Assistant/my-adk-agent/main.py", line 14, in <module>
+    from ui.chat_interface import run_chat_interface
+  File "/workspaces/Google-ADK-Calendar-Assistant/my-adk-agent/ui/chat_interface.py", line 2, in <module>
+    from services.adk_service import initialize_adk, run_adk_sync
+  File "/workspaces/Google-ADK-Calendar-Assistant/my-adk-agent/services/adk_service.py", line 23, in <module>
+    from speech_to_text import LIVE_AGENT_RUN_CONFIG
+ModuleNotFoundError: No module named 'speech_to_text'
+WARNING:google.auth._default:Authentication failed using Compute Engine authentication due to unavailable metadata server.
+ERROR:root:OAuth callback failed while exchanging authorization code
+Traceback (most recent call last):
+  File "/workspaces/Google-ADK-Calendar-Assistant/my-adk-agent/google_oauth/oauth_login.py", line 246, in get_creds
+    creds_db.upsert_credentials(user_id, creds, email=email)
+  File "/workspaces/Google-ADK-Calendar-Assistant/my-adk-agent/google_oauth/creds_db.py", line 112, in upsert_credentials
+    _get_client().collection(_COLLECTION).document(user_id).set(doc, merge=True)
+    ^^^^^^^^^^^^^
+  File "/workspaces/Google-ADK-Calendar-Assistant/my-adk-agent/google_oauth/creds_db.py", line 54, in _get_client
+    _client = firestore.Client(project=_PROJECT_ID) if _PROJECT_ID else firestore.Client()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/google/cloud/firestore_v1/client.py", line 98, in __init__
+    super(Client, self).__init__(
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/google/cloud/firestore_v1/base_client.py", line 153, in __init__
+    super(BaseClient, self).__init__(
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/google/cloud/client/__init__.py", line 361, in __init__
+    Client.__init__(
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/google/cloud/client/__init__.py", line 218, in __init__
+    credentials, _ = google.auth.default(scopes=scopes)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/google/auth/_default.py", line 748, in default
+    raise exceptions.DefaultCredentialsError(_CLOUD_SDK_MISSING_CREDENTIALS)
+google.auth.exceptions.DefaultCredentialsError: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+ERROR:root:OAuth callback failed while exchanging authorization code
+Traceback (most recent call last):
+  File "/workspaces/Google-ADK-Calendar-Assistant/my-adk-agent/google_oauth/oauth_login.py", line 226, in get_creds
+    flow.fetch_token(authorization_response=current_url)
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/google_auth_oauthlib/flow.py", line 287, in fetch_token
     return self.oauth2session.fetch_token(self.client_config["token_uri"], **kwargs)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/requests_oauthlib/oauth2_session.py", line 406, in fetch_token
@@ -39,4 +66,112 @@ Traceback (most recent call last):
     raise_from_error(params.get('error'), params)
   File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/oauthlib/oauth2/rfc6749/errors.py", line 398, in raise_from_error
     raise cls(**kwargs)
-oauthlib.oauth2.rfc6749.errors.InvalidGrantError: (invalid_grant) Missing code verifier.
+oauthlib.oauth2.rfc6749.errors.InvalidGrantError: (invalid_grant) Bad Request
+ERROR:root:OAuth callback failed while exchanging authorization code
+Traceback (most recent call last):
+  File "/workspaces/Google-ADK-Calendar-Assistant/my-adk-agent/google_oauth/oauth_login.py", line 226, in get_creds
+    flow.fetch_token(authorization_response=current_url)
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/google_auth_oauthlib/flow.py", line 287, in fetch_token
+    return self.oauth2session.fetch_token(self.client_config["token_uri"], **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/requests_oauthlib/oauth2_session.py", line 406, in fetch_token
+    self._client.parse_request_body_response(r.text, scope=self.scope)
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/oauthlib/oauth2/rfc6749/clients/base.py", line 426, in parse_request_body_response
+    self.token = parse_token_response(body, scope=scope)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/oauthlib/oauth2/rfc6749/parameters.py", line 444, in parse_token_response
+    validate_token_parameters(params)
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/oauthlib/oauth2/rfc6749/parameters.py", line 451, in validate_token_parameters
+    raise_from_error(params.get('error'), params)
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/oauthlib/oauth2/rfc6749/errors.py", line 398, in raise_from_error
+    raise cls(**kwargs)
+oauthlib.oauth2.rfc6749.errors.InvalidGrantError: (invalid_grant) Bad Request
+ERROR:root:OAuth callback failed while exchanging authorization code
+Traceback (most recent call last):
+  File "/workspaces/Google-ADK-Calendar-Assistant/my-adk-agent/google_oauth/oauth_login.py", line 226, in get_creds
+    flow.fetch_token(authorization_response=current_url)
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/google_auth_oauthlib/flow.py", line 287, in fetch_token
+    return self.oauth2session.fetch_token(self.client_config["token_uri"], **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/requests_oauthlib/oauth2_session.py", line 406, in fetch_token
+    self._client.parse_request_body_response(r.text, scope=self.scope)
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/oauthlib/oauth2/rfc6749/clients/base.py", line 426, in parse_request_body_response
+    self.token = parse_token_response(body, scope=scope)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/oauthlib/oauth2/rfc6749/parameters.py", line 444, in parse_token_response
+    validate_token_parameters(params)
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/oauthlib/oauth2/rfc6749/parameters.py", line 451, in validate_token_parameters
+    raise_from_error(params.get('error'), params)
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/oauthlib/oauth2/rfc6749/errors.py", line 398, in raise_from_error
+    raise cls(**kwargs)
+oauthlib.oauth2.rfc6749.errors.InvalidGrantError: (invalid_grant) Bad Request
+ERROR:root:OAuth callback failed while exchanging authorization code
+Traceback (most recent call last):
+  File "/workspaces/Google-ADK-Calendar-Assistant/my-adk-agent/google_oauth/oauth_login.py", line 226, in get_creds
+    flow.fetch_token(authorization_response=current_url)
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/google_auth_oauthlib/flow.py", line 287, in fetch_token
+    return self.oauth2session.fetch_token(self.client_config["token_uri"], **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/requests_oauthlib/oauth2_session.py", line 406, in fetch_token
+    self._client.parse_request_body_response(r.text, scope=self.scope)
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/oauthlib/oauth2/rfc6749/clients/base.py", line 426, in parse_request_body_response
+    self.token = parse_token_response(body, scope=scope)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/oauthlib/oauth2/rfc6749/parameters.py", line 444, in parse_token_response
+    validate_token_parameters(params)
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/oauthlib/oauth2/rfc6749/parameters.py", line 451, in validate_token_parameters
+    raise_from_error(params.get('error'), params)
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/oauthlib/oauth2/rfc6749/errors.py", line 398, in raise_from_error
+    raise cls(**kwargs)
+oauthlib.oauth2.rfc6749.errors.InvalidGrantError: (invalid_grant) Bad Request
+WARNING:google.auth._default:Authentication failed using Compute Engine authentication due to unavailable metadata server.
+ERROR:root:OAuth callback failed while exchanging authorization code
+Traceback (most recent call last):
+  File "/workspaces/Google-ADK-Calendar-Assistant/my-adk-agent/google_oauth/oauth_login.py", line 246, in get_creds
+    creds_db.upsert_credentials(user_id, creds, email=email)
+  File "/workspaces/Google-ADK-Calendar-Assistant/my-adk-agent/google_oauth/creds_db.py", line 112, in upsert_credentials
+    _get_client().collection(_COLLECTION).document(user_id).set(doc, merge=True)
+    ^^^^^^^^^^^^^
+  File "/workspaces/Google-ADK-Calendar-Assistant/my-adk-agent/google_oauth/creds_db.py", line 54, in _get_client
+    _client = firestore.Client(project=_PROJECT_ID) if _PROJECT_ID else firestore.Client()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/google/cloud/firestore_v1/client.py", line 98, in __init__
+    super(Client, self).__init__(
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/google/cloud/firestore_v1/base_client.py", line 153, in __init__
+    super(BaseClient, self).__init__(
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/google/cloud/client/__init__.py", line 361, in __init__
+    Client.__init__(
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/google/cloud/client/__init__.py", line 218, in __init__
+    credentials, _ = google.auth.default(scopes=scopes)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspaces/Google-ADK-Calendar-Assistant/.venv/lib/python3.12/site-packages/google/auth/_default.py", line 748, in default
+    raise exceptions.DefaultCredentialsError(_CLOUD_SDK_MISSING_CREDENTIALS)
+google.auth.exceptions.DefaultCredentialsError: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.
+Invalid HTTP request received.

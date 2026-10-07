@@ -4,7 +4,7 @@ How to get WorkFlow's Google sign-in verified, so users don't see the
 "Google hasn't verified this app" warning and the 100-user cap is lifted.
 
 WorkFlow asks for `calendar` and `tasks`, which Google classes as **sensitive**
-scopes. Sensitive scopes need a manual review (usually a few days to a few weeks),
+scopes, and `drive.file` (only files the user picks), which is **non-sensitive**. Sensitive scopes need a manual review (usually a few days to a few weeks),
 but no paid security assessment. Adding a **restricted** scope such as
 `drive.readonly` later would require one, so avoid that if you can.
 
@@ -74,7 +74,7 @@ Google Cloud Console → **Google Auth Platform**:
 | Developer contact email | mt9312025@gmail.com |
 
 **Data Access** (scopes): `openid`, `.../auth/userinfo.email`,
-`.../auth/calendar`, `.../auth/tasks`. These must match `SCOPES` in
+`.../auth/calendar`, `.../auth/tasks`, `.../auth/drive.file`. These must match `SCOPES` in
 `oauth_login.py` exactly; remove anything else listed there.
 
 **Audience:** set *Publishing status* to **In production**.
@@ -102,6 +102,11 @@ Then open the **Verification Center** and click **Prepare for verification** /
 > task to finish my essay by Oct 21", "mark that done"). The app shows tasks with due
 > dates on its calendar view and creates, updates, and deletes tasks when the user
 > asks. `tasks.readonly` would not allow creating or updating tasks.
+
+**`https://www.googleapis.com/auth/drive.file`**: non-sensitive. Users attach
+Google Drive files to a chat message through the Google Picker; the app downloads
+only the files they pick and sends them to Gemini with that message. It cannot see
+any other Drive file.
 
 **`openid` / `userinfo.email`**: non-sensitive; used to identify the user so their
 encrypted tokens can be stored and found again.

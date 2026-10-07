@@ -16,7 +16,7 @@
 </head>
 <body>
   <h1>Privacy Policy for WorkFlow</h1>
-  <p class="updated">Last updated: September 11, 2026</p>
+  <p class="updated">Last updated: October 7, 2026</p>
 
   <p>WorkFlow ("the app", "we", "our") is an automated scheduling assistant that helps you manage your Google Calendar and Google Tasks through natural-language conversation. This policy explains what data we access, how we use it, and how it is protected.</p>
 
@@ -26,16 +26,17 @@
     <li><strong>Your email address and basic profile identifier</strong> (<code>openid</code>, <code>userinfo.email</code>) — used solely to identify your account and associate it with your stored credentials.</li>
     <li><strong>Google Calendar</strong> (<code>auth/calendar</code>) — to read, create, update, and delete events on your calendar at your request.</li>
     <li><strong>Google Tasks</strong> (<code>auth/tasks</code>) — to read, create, update, and delete tasks on your task lists at your request.</li>
+    <li><strong>Google Drive, only files you pick</strong> (<code>auth/drive.file</code>) — to open a file only after you choose it in the Google Drive picker and send it with a chat message. WorkFlow cannot see, list, or change any other file in your Drive, and never changes or deletes the files you pick.</li>
   </ul>
   <p>We only access this data in direct response to actions you take in the app (e.g., asking to schedule, move, or look up an event or task). We do not access your calendar or tasks in the background without a corresponding action you initiated.</p>
 
   <h2>2. How we use your data</h2>
   <p>Your calendar and task data is used exclusively to fulfill the requests you make within the app — for example, interpreting "move my dentist appointment to next Tuesday" and making the corresponding change via the Google Calendar API. Relevant event/task details are passed to Google's Gemini model (via the Google Agent Development Kit) solely to interpret your request and generate a response for that single interaction.</p>
-  <p><strong>Your Google Workspace / Google Calendar and Tasks data is not used to develop, improve, or train generalized AI and/or machine learning models.</strong> Data is used transiently to process your specific request and is not incorporated into any model training pipeline.</p>
+  <p><strong>Your Google Workspace / Google Calendar, Tasks, and Drive data is not used to develop, improve, or train generalized AI and/or machine learning models.</strong> Data is used transiently to process your specific request and is not incorporated into any model training pipeline.</p>
   <p>We do not sell your data, share it with advertisers, or use it for any purpose other than operating the features you directly use.</p>
 
   <h2>3. How your data is stored</h2>
-  <p>WorkFlow does not store your calendar events or task content. What we do store, per user account, is:</p>
+  <p>WorkFlow does not store your calendar events, task content, or Google Drive files. What we do store, per user account, is:</p>
   <ul>
     <li>Your Google account identifier and email address (used to look up your saved sign-in).</li>
     <li>Your OAuth access token, refresh token, and client secret — encrypted at rest (Fernet/AES-based symmetric encryption) in a Google Cloud Firestore database. These are never stored in plaintext, in cookies, or in browser local storage.</li>

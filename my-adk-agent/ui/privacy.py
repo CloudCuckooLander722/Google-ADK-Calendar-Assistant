@@ -13,7 +13,7 @@ for base in (str(PROJECT_ROOT), str(APP_ROOT)):
 import streamlit as st
 
 CONTACT_EMAIL = "mt9312025@gmail.com"
-EFFECTIVE_DATE = "October 6, 2026"
+EFFECTIVE_DATE = "October 7, 2026"
 
 # Keep this text in step with the code: it is what Google's OAuth reviewers
 # check the app against. Update it whenever scopes, storage, or the services
@@ -37,12 +37,13 @@ When you sign in with Google, you are asked to grant:
 | Your basic profile: Google account ID and email address (`openid`, `userinfo.email`) | Identifies you, so your sign-in can be kept and your stored tokens can be found again. |
 | Google Calendar (`calendar`) | Lists your calendars and shows your events; creates, updates, and deletes events **when you ask it to in the chat**; checks free/busy times to suggest meeting slots. |
 | Google Tasks (`tasks`) | Shows your tasks; creates, updates, and deletes tasks **when you ask it to in the chat**. |
+| Google Drive, only files you pick (`drive.file`) | Opens a file **only after you choose it in the Google Drive picker** and send it with a chat message, so the assistant can read it. WorkFlow cannot see, list, or change any other file in your Drive, and never changes or deletes the files you pick. |
 
 WorkFlow only changes your calendar or tasks in response to your own requests in the
 chat. It does not act on your data in the background.
 
 You can also give WorkFlow content directly: chat messages, screenshots, documents,
-and voice recordings you attach to a message.
+voice recordings, and Google Drive files you attach to a message.
 
 ## What WorkFlow stores
 
@@ -50,8 +51,9 @@ and voice recordings you attach to a message.
   in Google Cloud Firestore, together with your Google account ID, email address, the
   permissions you granted, and the token expiry time. They are kept until you delete
   your data (see below), so you stay signed in.
-- **Your calendar events and tasks are not stored by WorkFlow.** They are read from
-  Google each time they are shown or needed, and stay in your Google account.
+- **Your calendar events, tasks, and Google Drive files are not stored by WorkFlow.**
+  They are read from Google each time they are shown or needed, and stay in your
+  Google account.
 - **Chat history and attachments** are kept only in the server's memory for your
   current browser session. They are not written to a database and are lost when the
   session ends or the server restarts.

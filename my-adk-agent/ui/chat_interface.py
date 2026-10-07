@@ -1,13 +1,15 @@
 import streamlit as st
 from services.adk_service import (
     initialize_adk, run_adk_sync, content,
-    SCREENSHOT_MIME_TYPES, DOCUMENT_MIME_TYPES,
+    SCREENSHOT_MIME_TYPES, DOCUMENT_MIME_TYPES, DRIVE_MIME_TYPES,
 )
 from config.settings import MESSAGE_HISTORY_KEY, get_api_key
 from streamlit_js_eval import streamlit_js_eval
 from streamlit_calendar import calendar as st_calendar
+from streamlit_google_picker import google_picker
 
 from pathlib import Path
+import os
 import sys
 import datetime
 import logging
@@ -21,7 +23,10 @@ for base in (str(PROJECT_ROOT), str(APP_ROOT)):
         sys.path.insert(0, base)
 
 from ui.fetch_timezone import fetch_timezone
-from google_oauth.oauth_login import get_calendar_service, get_tasks_service, restore_signed_in_user
+from google_oauth.oauth_login import (
+    OAuthLogin, get_calendar_service, get_tasks_service, get_drive_access_token,
+    get_picker_app_id, restore_signed_in_user,
+)
 
 
 # One height for both panels so the chat box and the calendar always match.
@@ -36,6 +41,9 @@ ATTACH_NONCE_KEY = "attach_nonce"
 # Extensions (without the dot, as st.file_uploader wants them) for each upload mode.
 SCREENSHOT_TYPES = [ext.lstrip(".") for ext in SCREENSHOT_MIME_TYPES]
 DOCUMENT_TYPES = [ext.lstrip(".") for ext in DOCUMENT_MIME_TYPES]
+# The Google Picker runs in the browser, so it needs its own API key: one
+# restricted to the Google Picker API and to this app's web addresses.
+GOOGLE_PICKER_API_KEY = os.environ.get("GOOGLE_PICKER_API_KEY")
 
 # The calendar renders in its own iframe, so it can't inherit the page fonts.
 CALENDAR_CSS = """
@@ -75,6 +83,34 @@ def _calendar_window() -> tuple[datetime.datetime, datetime.datetime]:
     window_start = (month_start - datetime.timedelta(days=1)).replace(day=1)
     window_end = (month_start + datetime.timedelta(days=62)).replace(day=1)
     return window_start, window_end
+
+def _google_drive_files(key: str) -> list:
+    """
+    Renders the Google Drive picker and returns the files picked with it, or
+    explains why it can't be shown. The files are downloaded only when sent.
+    """
+    app_id = get_picker_app_id()
+    if not GOOGLE_PICKER_API_KEY or not app_id:
+        st.caption("Google Drive isn't set up on this server yet.")
+        return []
+
+    token = get_drive_access_token()
+    if not token:
+        # Signed in before WorkFlow asked for Drive, or unticked it at Google's
+        # consent screen: signing in again asks for it.
+        st.caption("WorkFlow needs your permission to open files you pick from Google Drive.")
+        st.link_button("Connect Google Drive", OAuthLogin().init_google_auth())
+        return []
+
+    return list(google_picker(
+        label="Pick files from Google Drive",
+        token=token,
+        apiKey=GOOGLE_PICKER_API_KEY,
+        appId=app_id,
+        accept_multiple_files=True,
+        type=DRIVE_MIME_TYPES,
+        key=key,
+    ))
 
 
 def _google_calendar_events(window_start, window_end, max_results: int = 250) -> list[dict]:
@@ -176,24 +212,26 @@ def _attachment_name(attachment) -> str:
 def _attachment_menu(nonce: int) -> dict:
     """
     Renders the add_col menu where the user picks what to attach: a screenshot,
-    a document, or a recording. Returns the picks as keyword arguments for
-    services.adk_service.content(): screenshots, documents, recording.
+    a document, a recording, or Google Drive files. Returns the picks as keyword
+    arguments for services.adk_service.content(): screenshots, documents,
+    recording, google_drive.
 
-    Tabs (rather than a mode switch) keep all three widgets rendered, so picks
+    Tabs (rather than a mode switch) keep every widget rendered, so picks
     made in one tab survive switching to another.
     """
-    keys = {name: f"attach_{name}_{nonce}" for name in ("screenshots", "documents", "recording")}
+    keys = {name: f"attach_{name}_{nonce}" for name in ("screenshots", "documents", "recording", "google_drive")}
     # Widget values from the previous run are already in session state, so the
     # button can show how many things are attached while the menu is closed.
     count = (
         len(st.session_state.get(keys["screenshots"]) or [])
         + len(st.session_state.get(keys["documents"]) or [])
         + (1 if st.session_state.get(keys["recording"]) is not None else 0)
+        + len(st.session_state.get(keys["google_drive"]) or [])
     )
     label = f"📎 {count}" if count else "➕"
 
-    with st.popover(label, help="Attach a screenshot, document, or recording to your next message"):
-        screenshot_tab, document_tab, record_tab = st.tabs(["Screenshot", "Document", "Record"])
+    with st.popover(label, help="Attach a screenshot, document, recording, or Google Drive file to your next message"):
+        screenshot_tab, document_tab, record_tab, google_drive_tab = st.tabs(["Screenshot", "Document", "Record", "Google Drive"])
         with screenshot_tab:
             screenshots = st.file_uploader(
                 "Upload screenshots", type=SCREENSHOT_TYPES,
@@ -206,12 +244,15 @@ def _attachment_menu(nonce: int) -> dict:
             )
         with record_tab:
             recording = st.audio_input("Record a voice message", key=keys["recording"])
+        with google_drive_tab:
+            google_drive = _google_drive_files(keys["google_drive"])
         st.caption("Attachments are sent with your next message.")
 
     return {
         "screenshots": list(screenshots or []),
         "documents": list(documents or []),
         "recording": recording,
+        "google_drive": google_drive,
     }
 
 
@@ -292,7 +333,10 @@ def run_chat_interface():
 
         if prompt:
             # Show the prompt plus a label per attachment (never the raw bytes).
-            labels = [f"📎 {_attachment_name(a)}" for a in attachments["screenshots"] + attachments["documents"]]
+            labels = [
+                f"📎 {_attachment_name(a)}"
+                for a in attachments["screenshots"] + attachments["documents"] + attachments["google_drive"]
+            ]
             if attachments["recording"] is not None:
                 labels.append("🎤 Recording")
             shown = "\n\n".join([prompt, *labels])

@@ -80,6 +80,13 @@ def init_db():
     return None
 
 
+def _granted_scopes(creds) -> list[str]:
+    """The scopes the user actually granted. Google lets them untick some of the
+    requested ones (e.g. Drive), so after sign-in these can be fewer than creds.scopes."""
+    scopes = getattr(creds, "granted_scopes", None) or creds.scopes or []
+    return scopes.split() if isinstance(scopes, str) else list(scopes)
+
+
 def upsert_credentials(user_id: str, creds, email: str | None = None):
     """
     Save (insert or update) a google.oauth2.credentials.Credentials object
@@ -97,7 +104,7 @@ def upsert_credentials(user_id: str, creds, email: str | None = None):
         "client_id": creds.client_id,
         "client_secret": _encrypt(creds.client_secret),
         "token_uri": creds.token_uri,
-        "scopes": list(creds.scopes) if creds.scopes else [],
+        "scopes": _granted_scopes(creds),
         "expiry": creds.expiry.isoformat() if creds.expiry else None,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }

@@ -3,6 +3,7 @@ import asyncio
 import logging
 import time
 import os
+import requests
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
 from google.genai import types as genai_types
@@ -39,6 +40,19 @@ DOCUMENT_MIME_TYPES = {
 }
 RECORDING_MIME_TYPES = {".wav": "audio/wav", ".mp3": "audio/mp3"}
 
+# Google Docs, Sheets and Slides have no file of their own to download: Drive
+# exports them to a format Gemini reads. Sheets export only the first sheet.
+DRIVE_EXPORT_MIME_TYPES = {
+    "application/vnd.google-apps.document": "application/pdf",
+    "application/vnd.google-apps.presentation": "application/pdf",
+    "application/vnd.google-apps.spreadsheet": "text/csv",
+}
+# Everything the Google Drive picker lets the user choose.
+DRIVE_MIME_TYPES = sorted({
+    *SCREENSHOT_MIME_TYPES.values(), *DOCUMENT_MIME_TYPES.values(), *DRIVE_EXPORT_MIME_TYPES,
+})
+DRIVE_API_URL = "https://www.googleapis.com/drive/v3/files"
+
 # Gemini rejects requests whose inline data is larger than ~20 MB in total.
 MAX_INLINE_BYTES = 20 * 1024 * 1024
 
@@ -57,6 +71,49 @@ def _read_attachment(attachment) -> tuple[str, bytes]:
     return path.name, path.read_bytes()
 
 
+def _read_drive_file(file) -> tuple[str, str, bytes]:
+    """
+    Returns (file name, MIME type, bytes) for one file picked with
+    streamlit_google_picker, downloading it with the picker's access token.
+    """
+    size = int(file.size or 0)
+    if size > MAX_INLINE_BYTES:
+        raise ValueError(
+            f"{file.name} is {size / 1024 / 1024:.1f} MB; the limit is "
+            f"{MAX_INLINE_BYTES // 1024 // 1024} MB per message."
+        )
+
+    export_mime_type = DRIVE_EXPORT_MIME_TYPES.get(file.type)
+    if export_mime_type:
+        mime_type = export_mime_type
+        url, params = f"{DRIVE_API_URL}/{file.id}/export", {"mimeType": export_mime_type}
+    else:
+        # Drive sometimes reports text files as application/octet-stream, so
+        # fall back to the extension, the same way uploaded files are checked.
+        mime_type = file.type if file.type in DRIVE_MIME_TYPES else _mime_type_for(
+            file.name, {**SCREENSHOT_MIME_TYPES, **DOCUMENT_MIME_TYPES}, "Google Drive file")
+        url, params = f"{DRIVE_API_URL}/{file.id}", {"alt": "media"}
+
+    try:
+        response = requests.get(
+            url, params=params, headers={"Authorization": f"Bearer {file.token}"}, timeout=60,
+        )
+        response.raise_for_status()
+    except requests.RequestException:
+        logging.exception("Failed to download Google Drive file %s", file.id)
+        raise ValueError(f"{file.name}: couldn't download it from Google Drive. Pick it again and retry.")
+    return file.name, mime_type, response.content
+
+
+def _document_part(label: str, name: str, mime_type: str, data: bytes) -> genai_types.Part:
+    """PDFs and images go to Gemini as bytes; text/* is decoded and labeled so the
+    agent can tell it apart from the user's own prompt."""
+    if mime_type.startswith("text/"):
+        text = data.decode("utf-8", errors="replace")
+        return genai_types.Part(text=f"[{label}: {name}]\n{text}")
+    return genai_types.Part.from_bytes(data=data, mime_type=mime_type)
+
+
 def _mime_type_for(name: str, allowed: dict[str, str], kind: str) -> str:
     ext = Path(name).suffix.lower()
     mime_type = allowed.get(ext)
@@ -69,7 +126,8 @@ def content(prompt: str | None = None,
             speech_to_text: str | None = None,
             screenshots=None,
             documents=None,
-            recording=None) -> genai_types.Content:
+            recording=None,
+            google_drive: list | None = None) -> genai_types.Content:
     """
     Builds one user types.Content for run_adk_sync() from whichever inputs are given.
 
@@ -79,7 +137,9 @@ def content(prompt: str | None = None,
         screenshots:    list of images (.jpg/.jpeg/.png/.webp).
         documents:      list of documents (.pdf as bytes; .txt/.md/.csv as text).
         recording:      one audio clip (.wav from st.audio_input, or .mp3).
-    Each file can be a Streamlit UploadedFile, a (name, bytes) tuple, or a file path.
+        google_drive:   list of files picked with streamlit_google_picker (images,
+                        documents, and Google Docs/Sheets/Slides, which are exported).
+    Each uploaded file can be a Streamlit UploadedFile, a (name, bytes) tuple, or a file path.
     Raises ValueError with a user-readable message if a file is unsupported, the
     attachments are too large, or there is nothing to send.
     """
@@ -95,12 +155,10 @@ def content(prompt: str | None = None,
     for document in documents or []:
         name, data = _read_attachment(document)
         mime_type = _mime_type_for(name, DOCUMENT_MIME_TYPES, "document")
-        if mime_type.startswith("text/"):
-            # Label the text so the agent can tell it apart from the user's own prompt.
-            text = data.decode("utf-8", errors="replace")
-            parts.append(genai_types.Part(text=f"[Document: {name}]\n{text}"))
-        else:
-            parts.append(genai_types.Part.from_bytes(data=data, mime_type=mime_type))
+        parts.append(_document_part("Document", name, mime_type, data))
+
+    for file in google_drive or []:
+        parts.append(_document_part("Google Drive file", *_read_drive_file(file)))
 
     for screenshot in screenshots or []:
         name, data = _read_attachment(screenshot)
@@ -113,7 +171,7 @@ def content(prompt: str | None = None,
         parts.append(genai_types.Part.from_bytes(data=data, mime_type=mime_type))
 
     if not parts:
-        raise ValueError("Nothing to send: add a prompt, screenshot, document, or recording.")
+        raise ValueError("Nothing to send: add a prompt, screenshot, document, recording, or Google Drive file.")
 
     inline_bytes = sum(len(part.inline_data.data) for part in parts if part.inline_data)
     if inline_bytes > MAX_INLINE_BYTES:

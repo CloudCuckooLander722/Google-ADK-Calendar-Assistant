@@ -20,6 +20,8 @@ from google.oauth2 import id_token as google_id_token
 from google.auth.transport import requests as google_requests
 from google_oauth import creds_db
 from google_oauth.credentials_store import get_valid_credentials
+import functools
+import json
 import logging
 import requests
 from typing import Optional
@@ -84,11 +86,14 @@ def get_cookie_manager():
 # ID token we can decode for a stable, permanent user_id (the "sub" claim).
 # This is what lets a *separate backend function* look up the same user's
 # credentials later -- cookies alone can't get creds to a backend process.
+DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
 SCOPES = [
     'openid',
     'https://www.googleapis.com/auth/userinfo.email',
     'https://www.googleapis.com/auth/calendar',
     'https://www.googleapis.com/auth/tasks',
+    # Only the files the user picks in the Google Drive picker, never the whole Drive.
+    DRIVE_SCOPE,
 ]
 
 
@@ -189,6 +194,14 @@ class OAuthLogin:
             st.info("Loading secure session context...")
             st.stop()
 
+        # A fresh ?code is handled before the saved user_id cookie, so signing in
+        # again (e.g. to grant Google Drive) replaces the stored tokens instead
+        # of being ignored for the old ones.
+        if 'code' in st.query_params:
+            creds = self._exchange_code(cookies)
+            if creds is not None:
+                return creds
+
         # FIX: the cookie now only ever holds a user_id, never token material.
         # Actual credentials live in the encrypted DB (creds_db.py) and are
         # fetched/refreshed through the single shared helper
@@ -201,72 +214,75 @@ class OAuthLogin:
             # Stored creds missing/corrupted -- fall through to re-auth.
 
         if 'code' in st.query_params:
-            code = st.query_params.get('code')
-            saved_state = st.session_state.get("oauth_state") or cookies.get("oauth_state")
-            # A malformed/incomplete callback URL (code present, state missing)
-            # would otherwise raise an uncaught KeyError here.
-            query_state = st.query_params.get("state")
-            if not query_state:
-                logging.warning("OAuth callback missing 'state' query param")
-                st.error("Sign-in failed. Please try logging in again.")
-                return None
-            try:
-                if saved_state == query_state: #test before starting coding requirements
-                    flow = Flow.from_client_secrets_file(
-                        client_secrets_file=self.creds_path,
-                        scopes=self.scopes,
-                        state=saved_state,
-                    )
-                    flow.redirect_uri = self.redirect_uri
-                    flow.code_verifier = (
-                        st.session_state.get("oauth_code_verifier")
-                        or cookies.get("oauth_code_verifier")
-                    )
-
-                    incoming_state = query_state
-                    current_url = f"{self.redirect_uri}?code={code}&state={incoming_state}"
-                    flow.fetch_token(authorization_response=current_url)
-
-                    creds = flow.credentials
-
-                    # FIX: decode the ID token Google returns alongside the
-                    # access token to get a stable user_id ("sub" claim) and
-                    # email, without an extra network round-trip via build().
-                    id_info = google_id_token.verify_oauth2_token(
-                        creds.id_token,
-                        google_requests.Request(),
-                        audience=creds.client_id,
-                    )
-                    user_id = str(id_info["sub"])
-                    email = str(id_info.get("email"))
-                    st.query_params["user_id"] = user_id
-                    st.session_state["user_id"] = user_id
-
-                    # FIX: persist full credentials to the encrypted DB, keyed
-                    # by user_id. This is what the separate backend function
-                    # will read from later -- not cookies.
-                    creds_db.upsert_credentials(user_id, creds, email=email)
-
-
-
-                    # FIX: cookie now stores only the user_id (a pointer),
-                    # not token material. Much smaller trust surface for
-                    # anything that can read the user's browser storage.
-                    self.cookie_manager.set(cookie="user_id", val=str(user_id), key="set_user_id")
-                    self.cookie_manager.set(cookie="logged_in", val="true", key="set_logged_in")
-
-                    self.cookie_manager.delete("oauth_state", key="delete_oauth_state")
-
-                    st.query_params.clear()
-                    
-                    return creds
-                
-            except Exception:
-                logging.exception("OAuth callback failed while exchanging authorization code")
-                st.error("Sign-in failed. Please try logging in again.")
-                return None
-
+            st.error("Sign-in failed. Please try logging in again.")
         return None
+
+    def _exchange_code(self, cookies: dict):
+        """Exchanges the ?code from Google's redirect for credentials and stores
+        them. Returns None (after logging why) if the exchange fails."""
+        code = st.query_params.get('code')
+        saved_state = st.session_state.get("oauth_state") or cookies.get("oauth_state")
+        # A malformed/incomplete callback URL (code present, state missing)
+        # would otherwise raise an uncaught KeyError here.
+        query_state = st.query_params.get("state")
+        if not query_state:
+            logging.warning("OAuth callback missing 'state' query param")
+            return None
+        try:
+            if saved_state == query_state: #test before starting coding requirements
+                flow = Flow.from_client_secrets_file(
+                    client_secrets_file=self.creds_path,
+                    scopes=self.scopes,
+                    state=saved_state,
+                )
+                flow.redirect_uri = self.redirect_uri
+                flow.code_verifier = (
+                    st.session_state.get("oauth_code_verifier")
+                    or cookies.get("oauth_code_verifier")
+                )
+
+                incoming_state = query_state
+                current_url = f"{self.redirect_uri}?code={code}&state={incoming_state}"
+                flow.fetch_token(authorization_response=current_url)
+
+                creds = flow.credentials
+
+                # FIX: decode the ID token Google returns alongside the
+                # access token to get a stable user_id ("sub" claim) and
+                # email, without an extra network round-trip via build().
+                id_info = google_id_token.verify_oauth2_token(
+                    creds.id_token,
+                    google_requests.Request(),
+                    audience=creds.client_id,
+                )
+                user_id = str(id_info["sub"])
+                email = str(id_info.get("email"))
+                st.query_params["user_id"] = user_id
+                st.session_state["user_id"] = user_id
+
+                # FIX: persist full credentials to the encrypted DB, keyed
+                # by user_id. This is what the separate backend function
+                # will read from later -- not cookies.
+                creds_db.upsert_credentials(user_id, creds, email=email)
+
+
+
+                # FIX: cookie now stores only the user_id (a pointer),
+                # not token material. Much smaller trust surface for
+                # anything that can read the user's browser storage.
+                self.cookie_manager.set(cookie="user_id", val=str(user_id), key="set_user_id")
+                self.cookie_manager.set(cookie="logged_in", val="true", key="set_logged_in")
+
+                self.cookie_manager.delete("oauth_state", key="delete_oauth_state")
+
+                st.query_params.clear()
+                
+                return creds
+            
+        except Exception:
+            logging.exception("OAuth callback failed while exchanging authorization code")
+            return None
+
 
 def restore_signed_in_user() -> Optional[str]:
     """
@@ -339,6 +355,36 @@ def get_tasks_service():
     except Exception:
         logging.exception("Failed to build the Google Tasks API client")
         return None
+
+
+def get_drive_access_token() -> Optional[str]:
+    """
+    The signed-in user's access token for the Google Drive picker, or None if
+    they signed in before WorkFlow asked for Drive (or declined it) and need to
+    sign in again.
+    """
+    creds = fetch_creds()
+    if not creds or DRIVE_SCOPE not in (creds.scopes or []):
+        return None
+    return creds.token
+
+
+@functools.cache
+def get_picker_app_id() -> Optional[str]:
+    """
+    The Cloud project number, which the Google Picker wants as its app ID. An
+    OAuth client ID always starts with it: "<project number>-<hash>.apps.googleusercontent.com".
+    """
+    try:
+        with open(credentials_path) as f:
+            secrets = json.load(f)
+        client = secrets.get("web") or secrets.get("installed") or {}
+        return client["client_id"].split("-")[0]
+    except (OSError, ValueError, KeyError):
+        logging.exception("Failed to read the OAuth client ID from %s", credentials_path)
+        return None
+
+
 def delete_my_data(user_id: str) -> None:
     """
     Disconnects a user from WorkFlow: revokes the app's access at Google, deletes

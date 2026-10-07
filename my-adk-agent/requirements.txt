@@ -1,6 +1,7 @@
 streamlit==1.63.0
 extra-streamlit-components==0.1.81
 streamlit-calendar==1.4.0
+streamlit-google-picker==0.2.7
 google-auth==2.58.0
 google-auth-oauthlib==1.4.1
 google-auth-httplib2==0.2.1

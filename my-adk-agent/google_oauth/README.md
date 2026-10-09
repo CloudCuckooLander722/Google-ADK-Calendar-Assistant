@@ -333,6 +333,18 @@ return a clear success result after the API confirms deletion.
 - [ ] A missing or expired credential produces a re-authentication path,
 	rather than an API call with invalid credentials.
 
+###7.7
+
+- [] For the home page, it must have three sections, a navigation-header, a list-header, and a try-header.
+
+navigation must navigate from privacy policy / terms of service to login
+
+list header must list animated demos of features
+
+try-header would essentially lead to the login
+
+font in monserrat or playfair display for chic elegance
+
 ## 8. `chat_interface` Requirements
 
 Status: **Tentative.** This section covers the chat panel in

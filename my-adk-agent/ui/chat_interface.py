@@ -55,7 +55,7 @@ GOOGLE_PICKER_API_KEY = os.environ.get("GOOGLE_PICKER_API_KEY")
 # The calendar renders in its own iframe, so it can't inherit the page fonts.
 CALENDAR_CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700;900&display=swap');
-.fc { font-family: 'Lato', Arial, sans-serif; }
+.fc { font-family: 'Lato', Helvetica, sans-serif; }
 .fc .fc-toolbar-title { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; }
 """
 
@@ -120,7 +120,7 @@ def _google_drive_files(key: str) -> list:
         key=key,
     ))
 
-
+#how to use st.cache_resource?
 def _google_calendar_events(window_start, window_end, max_results: int = 250) -> list[dict]:
     """Events from every calendar shown in the user's Google Calendar, colored like Google does."""
     service = get_calendar_service()

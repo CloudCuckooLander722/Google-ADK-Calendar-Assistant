@@ -3,7 +3,9 @@ import asyncio
 import logging
 import time
 import os
+import threading
 import requests
+from dataclasses import dataclass, field
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
 from google.genai import types as genai_types
@@ -20,7 +22,7 @@ for base in (str(PROJECT_ROOT), str(APP_ROOT)):
         sys.path.insert(0, base)
     
 from agents.agent import root_agent
-from config.settings import APP_NAME_FOR_ADK, USER_ID, INITIAL_STATE, ADK_SESSION_KEY
+from config.settings import APP_NAME_FOR_ADK, INITIAL_STATE
 
 
 # File types each add_col upload mode accepts, mapped to their official API MIME type.
@@ -184,53 +186,73 @@ def content(prompt: str | None = None,
 
 
 @st.cache_resource
-def initialize_adk():
+def initialize_adk() -> Runner:
     """
-    Initializes the Google ADK Runner and manages the ADK session.
-    Uses Streamlit's cache_resource to ensure this runs only once per app load.
+    The ADK Runner and its in-memory session service. st.cache_resource builds
+    them once per server process and shares them with every browser session,
+    so a conversation's history survives page refreshes. Per-user state lives
+    in the sessions inside it (see get_conversation), never in the cached object
+    itself.
     """
-     # Create our ADK agent defined earlier.
     session_service = InMemorySessionService() # ADK's default in-memory session service for storing session data.
-    runner = Runner( # The ADK Runner orchestrates the agent's execution.
+    return Runner( # The ADK Runner orchestrates the agent's execution.
         agent=root_agent,
         app_name=APP_NAME_FOR_ADK,
         session_service=session_service,
         auto_create_session=True
     )
-    # Check if an ADK session ID already exists in Streamlit's session state.
-    if ADK_SESSION_KEY not in st.session_state:
-        # If not, create a new unique session ID and store it.
-        session_id = f"streamlit_adk_session_{int(time.time())}_{os.urandom(4).hex()}"
-        st.session_state[ADK_SESSION_KEY] = session_id
-        # Create a new session in ADK's session service.
-        asyncio.run(session_service.create_session(
+
+
+@dataclass
+class Conversation:
+    """One signed-in user's chat: the ADK session holding the agent's context,
+    the messages shown in the chat panel, and a counter bumped whenever the
+    agent may have changed their calendar (it keys the calendar cache)."""
+    session_id: str
+    messages: list[dict] = field(default_factory=list)
+    calendar_version: int = 0
+
+
+@st.cache_resource
+def _conversation_store() -> tuple[dict[str, Conversation], threading.Lock]:
+    """Every user's Conversation, keyed by their Google account id. Cached like
+    the runner, so it outlives each browser session (and therefore refreshes)."""
+    return {}, threading.Lock()
+
+
+def find_conversation(user_key: str) -> Conversation | None:
+    """The user's conversation if they have one, without creating it."""
+    conversations, _ = _conversation_store()
+    return conversations.get(user_key)
+
+
+def get_conversation(runner: Runner, user_key: str) -> Conversation:
+    """
+    The user's conversation, created on first use. Also recreates its ADK
+    session if the session service lost it (e.g. after st.cache_resource.clear()).
+    """
+    conversations, lock = _conversation_store()
+    with lock:
+        conversation = conversations.get(user_key)
+        if conversation is None:
+            conversation = Conversation(session_id=f"chat_{int(time.time())}_{os.urandom(4).hex()}")
+            conversations[user_key] = conversation
+
+    # get_session/create_session are async - they must be awaited (via
+    # asyncio.run here); a bare coroutine object is always truthy.
+    session = asyncio.run(runner.session_service.get_session(
+        app_name=APP_NAME_FOR_ADK, user_id=user_key, session_id=conversation.session_id,
+    ))
+    if not session:
+        asyncio.run(runner.session_service.create_session(
             app_name=APP_NAME_FOR_ADK,
-            user_id=USER_ID,
-            session_id=session_id,
+            user_id=user_key,
+            session_id=conversation.session_id,
             state=INITIAL_STATE, # Initialize with predefined state.
         ))
-    else:
-        # If an ADK session ID already exists (e.g., on a Streamlit rerun), retrieve it.
-        session_id = st.session_state[ADK_SESSION_KEY]
-        # Verify if the session still exists in the ADK session service.
-        # This handles cases where the service might reset (less common with cache_resource, but good practice).
-        # get_session is async - must be awaited (via asyncio.run here), otherwise
-        # this checks the truthiness of a coroutine object, which is always True,
-        # silently disabling this recreate-if-lost branch entirely.
-        existing_session = asyncio.run(session_service.get_session(
-            app_name=APP_NAME_FOR_ADK, user_id=USER_ID, session_id=session_id
-        ))
-        if not existing_session:
-            # If the session was lost (e.g., full app restart without clearing cache), recreate it.
-            asyncio.run(session_service.create_session(
-                app_name=APP_NAME_FOR_ADK,
-                user_id=USER_ID,
-                session_id=session_id,
-                state=INITIAL_STATE
-            ))
-    return runner, session_id
+    return conversation
 
-async def run_adk_async(runner: Runner, session_id: str, content: genai_types.Content | str):
+async def run_adk_async(runner: Runner, user_key: str, session_id: str, content: genai_types.Content | str):
     """
     Asynchronously runs a single turn of the ADK agent conversation.
     `content` is normally built by content(); a plain string is wrapped into a text-only Content.
@@ -241,7 +263,7 @@ async def run_adk_async(runner: Runner, session_id: str, content: genai_types.Co
         return "I didn't receive any message to respond to."
 
     try:
-        session = await runner.session_service.get_session(app_name=APP_NAME_FOR_ADK, user_id=USER_ID, session_id=session_id)
+        session = await runner.session_service.get_session(app_name=APP_NAME_FOR_ADK, user_id=user_key, session_id=session_id)
     except Exception:
         logging.exception("Failed to look up ADK session %s", session_id)
         return "Something went wrong loading your session. Please refresh and try again."
@@ -254,7 +276,7 @@ async def run_adk_async(runner: Runner, session_id: str, content: genai_types.Co
     try:
         # Iterate through the asynchronous events generated by the ADK runner.
         # ADK can yield multiple events (e.g., tool calls, interim responses) before the final response.
-        async for event in runner.run_async(user_id=USER_ID, session_id=session_id, new_message=content):
+        async for event in runner.run_async(user_id=user_key, session_id=session_id, new_message=content):
             if event.is_final_response(): # We are only interested in the final response from the agent.
                 if event.content and event.content.parts:
                     # With include_thoughts=True, Gemini can return the model's
@@ -278,13 +300,13 @@ async def run_adk_async(runner: Runner, session_id: str, content: genai_types.Co
 
     return final_response_text or "[Agent returned an empty response]"
 
-def run_adk_sync(runner: Runner, session_id: str, content: genai_types.Content | str):
+def run_adk_sync(runner: Runner, user_key: str, session_id: str, content: genai_types.Content | str):
     """
     Synchronous wrapper for running ADK, as Streamlit does not directly support async calls in the main thread.
     """
     try:
         # Runs the asynchronous function in a new event loop.
-        return asyncio.run(run_adk_async(runner, session_id, content))
+        return asyncio.run(run_adk_async(runner, user_key, session_id, content))
     except Exception:
         logging.exception("run_adk_sync failed for session %s", session_id)
         return "Sorry, I ran into an unexpected error handling that request. Please try again."

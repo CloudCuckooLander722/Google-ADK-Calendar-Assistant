@@ -1,9 +1,9 @@
 import streamlit as st
 from services.adk_service import (
-    initialize_adk, run_adk_sync, content,
+    initialize_adk, run_adk_sync, content, find_conversation, get_conversation,
     SCREENSHOT_MIME_TYPES, DOCUMENT_MIME_TYPES, DRIVE_MIME_TYPES,
 )
-from config.settings import MESSAGE_HISTORY_KEY, get_api_key
+from config.settings import get_api_key
 from streamlit_js_eval import streamlit_js_eval
 from streamlit_calendar import calendar as st_calendar
 from streamlit_google_picker import google_picker
@@ -35,6 +35,13 @@ PANEL_HEIGHT = 620
 # scrolling message log plus the input fit inside PANEL_HEIGHT without a
 # second scrollbar on the panel itself.
 CHAT_LOG_HEIGHT = PANEL_HEIGHT - 108
+
+# How long the calendar panel reuses what it fetched from Google. The agent's
+# own changes bypass this (see _calendar_blocks).
+CALENDAR_CACHE_SECONDS = 120
+# Before the signed-in user is known (the first run after a refresh, while the
+# cookie loads), the chat is keyed to this browser session instead.
+GUEST_KEY = "guest_chat_key"
 
 # Bumped after each send so the attachment widgets get new keys and start empty.
 ATTACH_NONCE_KEY = "attach_nonce"
@@ -83,6 +90,7 @@ def _calendar_window() -> tuple[datetime.datetime, datetime.datetime]:
     window_start = (month_start - datetime.timedelta(days=1)).replace(day=1)
     window_end = (month_start + datetime.timedelta(days=62)).replace(day=1)
     return window_start, window_end
+
 
 def _google_drive_files(key: str) -> list:
     """
@@ -195,13 +203,18 @@ def _google_tasks(window_start, window_end, max_results: int = 100) -> list[dict
     return calendar_tasks
 
 
-def _calendar_blocks() -> list[dict]:
+@st.cache_data(ttl=CALENDAR_CACHE_SECONDS, show_spinner=False)
+def _calendar_blocks(user_id: str, calendar_version: int, window_start, window_end) -> list[dict]:
     """
     Every block (event or task) for the calendar panel, shaped for the
-    streamlit-calendar (FullCalendar) widget. Fetched fresh on each run, so a
-    refresh or an agent change shows up right away. Empty if not signed in.
+    streamlit-calendar (FullCalendar) widget.
+
+    Cached per user, so reruns and refreshes don't refetch every calendar from
+    Google. The arguments are the cache key: user_id keeps one user's calendar
+    from ever being shown to another, and calendar_version is bumped after each
+    agent turn, so the agent's changes show up right away. Changes made in
+    Google Calendar itself show up within CALENDAR_CACHE_SECONDS.
     """
-    window_start, window_end = _calendar_window()
     return _google_calendar_events(window_start, window_end) + _google_tasks(window_start, window_end)
 
 
@@ -299,8 +312,12 @@ def run_chat_interface():
     # their Google credentials again.
     signed_in_user = restore_signed_in_user()
 
-    # Initialize ADK runner and session ID (cached to run only once).
-    adk_runner, current_session_id = initialize_adk()
+    # The runner and every user's conversation are kept by st.cache_resource,
+    # so the chat and the agent's context survive a refresh. They're keyed by
+    # the Google account, never shared between users.
+    adk_runner = initialize_adk()
+    user_key = signed_in_user or st.session_state.setdefault(GUEST_KEY, f"guest_{os.urandom(8).hex()}")
+    conversation = find_conversation(user_key)
     fetch_timezone()
 
     # Left column: actual chat panel with messages and input in 40%
@@ -308,9 +325,6 @@ def run_chat_interface():
 
     with chat_col:
         st.markdown("#### WorkFlow Assistant")
-        # Initialize chat history.
-        if MESSAGE_HISTORY_KEY not in st.session_state:
-            st.session_state[MESSAGE_HISTORY_KEY] = []
         st.session_state.setdefault(ATTACH_NONCE_KEY, 0)
 
         # Outer panel is the same height as the calendar. Inside it, the
@@ -320,7 +334,7 @@ def run_chat_interface():
             chat_log = st.container(height=CHAT_LOG_HEIGHT, border=False)
             with chat_log:
                 # Display existing chat messages.
-                for message in st.session_state[MESSAGE_HISTORY_KEY]:
+                for message in (conversation.messages if conversation else []):
                     with st.chat_message(message["role"]):
                         st.markdown(message["content"])
 
@@ -341,7 +355,8 @@ def run_chat_interface():
                 labels.append("🎤 Recording")
             shown = "\n\n".join([prompt, *labels])
 
-            st.session_state[MESSAGE_HISTORY_KEY].append({"role": "user", "content": shown})
+            conversation = get_conversation(adk_runner, user_key)
+            conversation.messages.append({"role": "user", "content": shown})
             with chat_log:
                 with st.chat_message("user"):
                     st.markdown(shown)
@@ -354,10 +369,12 @@ def run_chat_interface():
                         except ValueError as e:
                             agent_response = f"I couldn't send that: {e}"
                         else:
-                            agent_response = run_adk_sync(adk_runner, current_session_id, message)
+                            agent_response = run_adk_sync(adk_runner, user_key, conversation.session_id, message)
                         empty_response.markdown(agent_response)
 
-            st.session_state[MESSAGE_HISTORY_KEY].append({"role": "assistant", "content": agent_response})
+            conversation.messages.append({"role": "assistant", "content": agent_response})
+            # The agent may have changed the calendar: fetch it fresh next run.
+            conversation.calendar_version += 1
             # Attachments go with exactly one prompt: new widget keys empty them, and
             # the rerun redraws the menu (and its count) from the cleared widgets.
             st.session_state[ATTACH_NONCE_KEY] += 1
@@ -365,7 +382,11 @@ def run_chat_interface():
 
     with calendar_col:
         st.markdown("#### Google Calendar")
-        calendar_blocks = _calendar_blocks()
+        calendar_blocks = []
+        if signed_in_user:
+            calendar_blocks = _calendar_blocks(
+                signed_in_user, conversation.calendar_version if conversation else 0, *_calendar_window(),
+            )
         st_calendar(
             events=calendar_blocks,
             options={

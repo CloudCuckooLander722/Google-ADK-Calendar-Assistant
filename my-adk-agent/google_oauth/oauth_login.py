@@ -135,6 +135,11 @@ def _resolve_credentials_path() -> str:
 
 credentials_path = _resolve_credentials_path()
 
+# How many runs get_creds waits for the browser's cookies after Google's redirect.
+OAUTH_COOKIE_WAITS_KEY = "oauth_cookie_waits"
+MAX_OAUTH_COOKIE_WAITS = 3
+
+
 class OAuthLogin:
     def __init__(self):
         os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
@@ -198,6 +203,17 @@ class OAuthLogin:
         # again (e.g. to grant Google Drive) replaces the stored tokens instead
         # of being ignored for the old ones.
         if 'code' in st.query_params:
+            # Google's redirect starts a new Streamlit session, and the browser's
+            # cookies (with the oauth_state to check the code against) only
+            # arrive one rerun later. Wait for them rather than failing the code.
+            saved_state = st.session_state.get("oauth_state") or cookies.get("oauth_state")
+            waits = st.session_state.get(OAUTH_COOKIE_WAITS_KEY, 0)
+            if not saved_state and not cookies and waits < MAX_OAUTH_COOKIE_WAITS:
+                st.session_state[OAUTH_COOKIE_WAITS_KEY] = waits + 1
+                st.info("Finishing sign-in...")
+                st.markdown('Stuck here? <a href="/login_page" target="_self">Start over</a>', unsafe_allow_html=True)
+                st.stop()
+
             creds = self._exchange_code(cookies)
             if creds is not None:
                 return creds
@@ -278,7 +294,8 @@ class OAuthLogin:
                 st.query_params.clear()
                 
                 return creds
-            
+            logging.warning("OAuth callback state did not match the saved oauth_state (saved state present: %s)", bool(saved_state))
+            return None
         except Exception:
             logging.exception("OAuth callback failed while exchanging authorization code")
             return None

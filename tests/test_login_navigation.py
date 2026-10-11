@@ -266,3 +266,54 @@ def test_failed_google_code_shows_the_sign_in_card_again(tmp_path):
     assert "code" not in at.query_params and "state" not in at.query_params
     assert "Welcome back" in _shown(at)
     assert "GOOGLE-BUTTON" in _shown(at)
+
+
+GET_CREDS_APP = """
+import sys
+sys.path.insert(0, {app_root!r})
+from unittest import mock
+import streamlit as st
+import google_oauth.oauth_login as ol
+
+class FakeCookies:
+    def get_all(self, key=None):
+        return {cookies!r}
+    def set(self, *a, **k): pass
+    def delete(self, *a, **k): pass
+
+st.session_state.setdefault("exchanged", [])
+with mock.patch.object(ol, "get_cookie_manager", lambda: FakeCookies()), \\
+     mock.patch.object(ol.OAuthLogin, "_exchange_code", lambda self, c: st.session_state.exchanged.append(dict(c))):
+    ol.OAuthLogin().get_creds()
+"""
+
+
+def _run_get_creds(tmp_path, cookies):
+    app = tmp_path / "get_creds_app.py"
+    app.write_text(GET_CREDS_APP.format(app_root=str(APP_ROOT), cookies=cookies))
+    at = AppTest.from_file(str(app), default_timeout=60)
+    at.query_params["code"] = "c"
+    at.query_params["state"] = "s"
+    return at
+
+
+def test_get_creds_waits_for_cookies_after_google_redirect(tmp_path):
+    """Google's redirect starts a new session whose cookies (with oauth_state)
+    arrive a rerun later: the code must not be judged until then."""
+    at = _run_get_creds(tmp_path, {}).run()
+    assert not at.exception
+    assert at.session_state["exchanged"] == []
+    assert any("Finishing sign-in" in i.value for i in at.info)
+
+
+def test_get_creds_exchanges_code_once_cookies_arrive(tmp_path):
+    at = _run_get_creds(tmp_path, {"oauth_state": "s", "oauth_code_verifier": "v"}).run()
+    assert not at.exception
+    assert at.session_state["exchanged"] == [{"oauth_state": "s", "oauth_code_verifier": "v"}]
+
+
+def test_get_creds_stops_waiting_after_a_few_runs(tmp_path):
+    at = _run_get_creds(tmp_path, {})
+    for _ in range(4):
+        at.run()
+    assert at.session_state["exchanged"] == [{}]  # tried once, then gave up waiting

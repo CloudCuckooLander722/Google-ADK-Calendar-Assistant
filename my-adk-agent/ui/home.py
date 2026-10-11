@@ -298,11 +298,11 @@ html, [data-testid="stMain"], [data-testid="stAppViewContainer"] { scroll-behavi
 PAGE = """
 <div class="wf-home">
 <nav class="wf-nav">
-    <a class="wf-brand" href="/show_home_page"><span>W</span>WorkFlow</a>
+    <a class="wf-brand" href="/"><span>W</span>WorkFlow</a>
     <ul>
-        <li><a href="/show_home_page">Home</a></li>
+        <li><a href="/">Home</a></li>
         <li><a href="/privacy">Privacy Policy</a></li>
-        <li class="wf-nav-cta"><a href="/">Log in or sign up</a></li>
+        <li class="wf-nav-cta"><a href="/login_page">Log in or sign up</a></li>
     </ul>
 </nav>
 
@@ -376,10 +376,10 @@ PAGE = """
 <section class="wf-try" id="try">
     <h2>Ready to get your time back?</h2>
     <p>Sign in with Google to connect your calendar. It takes about a minute.</p>
-    <a href="/">Try WorkFlow free</a>
+    <a href="/login_page">Try WorkFlow Assistant free</a>
 </section>
 
-<div class="wf-footer">WorkFlow · AI scheduling assistant</div>
+<div class="wf-footer">WorkFlow Assistant · AI scheduling assistant</div>
 </div>
 """
 

@@ -273,7 +273,7 @@ def run_chat_interface():
     """
     Sets up and runs the Streamlit web application for the ADK chat assistant.
     """
-    st.set_page_config(page_title="WorkFlow Workspace", layout="wide")
+    st.set_page_config(page_title="WorkFlow Assistant", layout="wide")
 
     api_key = get_api_key()
     if not api_key:
@@ -284,13 +284,13 @@ def run_chat_interface():
     st.markdown(
         """
         <style>
-        @import url('https://fonts.googleapis.com/css2?family=Lato:ital,wght@0,300;0,400;0,700;0,900;1,300;1,400;1,700;1,900&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Lato:ital,wght@0,300;0,400;0,700;0,900;1,300;1,400;1,700;1,900&family=Montserrat:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap');
 
         /* Helvetica isn't a Google Font, so it can't be loaded: it only renders
            where installed locally (mostly Apple devices) and falls back to Arial. */
         .stApp {
             background: #f6f7f9;
-            font-family: 'Lato', Arial, sans-serif;
+            font-family: 'Montserrat', 'Playfair Display', sans-serif;
         }
 
         .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {

@@ -523,4 +523,10 @@ speech clip ─────┘                       input                      
 - [ ] Forcing `run_adk_sync()` to raise shows an error reply in the chat and
 	leaves the page usable.
 
-#Note: Also use @st for stuff?
+### 8.11
+- When, in show_home_page, the widget "Try Workflow" or "Login or Sign Up" is clicked, it is redirected to login_page function. 
+
+-login_page must be able to display the login page if st.session_state.logged_in is False, or st.query_params is "False".
+Otherwise, display run_chat_interface or invoke that function.
+
+-When refreshed, run_chat_interface must keep the user's credentials and google calendar data.

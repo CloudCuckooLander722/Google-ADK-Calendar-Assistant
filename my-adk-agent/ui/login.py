@@ -12,6 +12,7 @@ for base in (str(PROJECT_ROOT), str(APP_ROOT)):
 
 import streamlit as st
 from google_oauth.oauth_login import OAuthLogin
+from ui.chat_interface import run_chat_interface
 
 
 def login():
@@ -222,4 +223,29 @@ def login():
     if creds is not None:
         st.session_state.logged_in = True
         st.query_params.logged_in = "True"
-   
+
+
+def login_page():
+    """
+    The /login page: the sign-in card while signed out, the chat workspace
+    once signed in.
+
+    A refresh starts a new Streamlit session with an empty session_state, but
+    the ?logged_in=True query parameter stays in the URL, so the user goes
+    straight back to the chat. run_chat_interface then restores their
+    credentials from the user_id cookie, and their conversation and calendar
+    from the server-side cache.
+    """
+    if st.query_params.get("logged_in") == "True":
+        st.session_state.logged_in = True
+
+    if not st.session_state.get("logged_in"):
+        st.query_params.logged_in = "False"
+        login()
+        # login() sets logged_in once Google's sign-in completes: rerun so this
+        # page swaps the sign-in card for the chat.
+        if st.session_state.get("logged_in"):
+            st.rerun()
+        return
+
+    run_chat_interface()

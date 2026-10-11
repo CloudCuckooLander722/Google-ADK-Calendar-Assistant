@@ -44,5 +44,5 @@ def test_oauth_login_supports_env_or_repo_credentials_fallback_and_homepage_abou
     assert "GOOGLE_CREDENTIALS_PATH" in oauth_source
     assert "credentials.json" in oauth_source
     assert "WorkFlow" in home_source
-    assert "About WorkFlow" in home_source
-    assert "manage your schedules" in home_source
+    assert 'href="/login_page"' in home_source
+    assert 'href="/privacy"' in home_source

@@ -195,3 +195,74 @@ def test_restore_signed_in_user_reads_user_id_cookie_after_refresh():
         st_mock.session_state = {}
         assert oauth_login.restore_signed_in_user() == "alice"
         assert st_mock.session_state["user_id"] == "alice"
+
+
+def test_sign_in_shows_chat_in_the_same_run_without_rerun(tmp_path):
+    """st.rerun() right after sign-in cuts the run short before the browser
+    saves the user_id cookie, so the next refresh forgets the user."""
+    calls = []
+
+    def login_that_succeeds():
+        calls.append("login")
+        login_module.st.session_state.logged_in = True
+        login_module.st.query_params.logged_in = "True"
+
+    with mock.patch("streamlit.rerun", side_effect=AssertionError("st.rerun() after sign-in")):
+        at = _run_login_page(tmp_path, login_that_succeeds, lambda: calls.append("chat"))
+    assert not at.exception
+    assert calls == ["login", "chat"]
+
+
+LOGIN_APP = """
+import sys
+sys.path.insert(0, {app_root!r})
+from unittest import mock
+import streamlit as st
+import ui.login as login_module
+
+class FakeAuth:
+    def __init__(self):
+        st.session_state.setdefault("exchanges", 0)
+    def login(self):
+        st.markdown("GOOGLE-BUTTON")
+        st.stop()
+    def get_creds(self):
+        if "code" not in st.query_params:
+            return None
+        st.session_state.exchanges += 1
+        return {creds}
+
+with mock.patch.object(login_module, "OAuthLogin", FakeAuth):
+    login_module.login()
+"""
+
+
+def _run_login(tmp_path, creds, query_params):
+    app = tmp_path / "login_app.py"
+    app.write_text(LOGIN_APP.format(app_root=str(APP_ROOT), creds=creds))
+    at = AppTest.from_file(str(app), default_timeout=60)
+    for key, value in query_params.items():
+        at.query_params[key] = value
+    return at.run()
+
+
+def _shown(at) -> str:
+    return "\n".join(m.value for m in at.markdown)
+
+
+def test_returning_from_google_skips_the_sign_in_card(tmp_path):
+    at = _run_login(tmp_path, "object()", {"code": "good", "state": "s"})
+    assert not at.exception
+    assert at.session_state["logged_in"] is True
+    assert at.query_params["logged_in"] == ["True"]
+    assert "Welcome back" not in _shown(at)
+    assert "GOOGLE-BUTTON" not in _shown(at)
+
+
+def test_failed_google_code_shows_the_sign_in_card_again(tmp_path):
+    at = _run_login(tmp_path, "None", {"code": "expired", "state": "s", "scope": "x"})
+    assert not at.exception
+    assert at.session_state["exchanges"] == 1
+    assert "code" not in at.query_params and "state" not in at.query_params
+    assert "Welcome back" in _shown(at)
+    assert "GOOGLE-BUTTON" in _shown(at)

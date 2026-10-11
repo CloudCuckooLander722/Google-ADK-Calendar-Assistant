@@ -14,6 +14,9 @@ import streamlit as st
 from google_oauth.oauth_login import OAuthLogin
 from ui.chat_interface import run_chat_interface
 
+# Query parameters Google adds when it sends the user back after sign-in.
+GOOGLE_REDIRECT_PARAMS = ("code", "state", "scope", "iss", "authuser", "prompt", "hd")
+
 
 def login():
     """
@@ -21,6 +24,28 @@ def login():
     """
     authenticator = OAuthLogin()
 
+    # Back from Google (?code=...): finish signing in without drawing the card,
+    # so login_page can show the chat in this same run.
+    if "code" not in st.query_params:
+        _show_sign_in_card(authenticator)
+    creds = authenticator.get_creds()
+    if creds is not None:
+        st.session_state.logged_in = True
+        st.query_params.logged_in = "True"
+        return
+
+    if "code" in st.query_params:
+        # The code didn't work (expired, or already used by an earlier run):
+        # drop Google's parameters so the card offers "Log in with Google" again.
+        for key in GOOGLE_REDIRECT_PARAMS:
+            if key in st.query_params:
+                del st.query_params[key]
+        _show_sign_in_card(authenticator)
+
+
+def _show_sign_in_card(authenticator: OAuthLogin):
+    """Draws the sign-in card with the "Log in with Google" button. Stops the
+    script there until the user goes to Google and comes back with a code."""
     st.markdown(
         """
         <style>
@@ -219,10 +244,6 @@ def login():
 
     # Keep the authorized Google OAuth flow intact while showing a polished card interface.
     authenticator.login()
-    creds = authenticator.get_creds()
-    if creds is not None:
-        st.session_state.logged_in = True
-        st.query_params.logged_in = "True"
 
 
 def login_page():
@@ -242,10 +263,10 @@ def login_page():
     if not st.session_state.get("logged_in"):
         st.query_params.logged_in = "False"
         login()
-        # login() sets logged_in once Google's sign-in completes: rerun so this
-        # page swaps the sign-in card for the chat.
-        if st.session_state.get("logged_in"):
-            st.rerun()
-        return
+        if not st.session_state.get("logged_in"):
+            return
+        # Signed in during this run: show the chat now. st.rerun() here would
+        # cut the run short before the browser saves the user_id cookie, and
+        # the next refresh would no longer know who the user is.
 
     run_chat_interface()

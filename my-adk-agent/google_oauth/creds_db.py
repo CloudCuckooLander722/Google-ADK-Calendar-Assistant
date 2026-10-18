@@ -30,6 +30,9 @@ from datetime import datetime, timezone
 from cryptography.fernet import Fernet, InvalidToken
 from google.cloud import firestore
 
+
+
+#edit this for later work sessions...
 _COLLECTION = os.environ.get("FIRESTORE_CREDS_COLLECTION", "users_google_creds")
 _PROJECT_ID = os.environ.get("PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT")
 

@@ -19,7 +19,7 @@ EFFECTIVE_DATE = "October 7, 2026"
 # check the app against. Update it whenever scopes, storage, or the services
 # user data is sent to change.
 POLICY = f"""
-# WorkFlow Privacy Policy
+# WorkFlow Assistant Privacy Policy
 
 **Effective date:** {EFFECTIVE_DATE}
 

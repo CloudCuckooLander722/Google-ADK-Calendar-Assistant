@@ -20,3 +20,8 @@ streamlit.log
 *.log
 .git
 .gitignore
+
+# Service-account keys
+gen-lang-client-*.json
+*-sa-key.json
+check_tz.py

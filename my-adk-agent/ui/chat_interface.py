@@ -3,6 +3,7 @@ from services.adk_service import (
     initialize_adk, run_adk_sync, content, find_conversation, get_conversation,
     SCREENSHOT_MIME_TYPES, DOCUMENT_MIME_TYPES, DRIVE_MIME_TYPES,
 )
+
 from config.settings import get_api_key
 from streamlit_js_eval import streamlit_js_eval
 from streamlit_calendar import calendar as st_calendar
@@ -120,7 +121,6 @@ def _google_drive_files(key: str) -> list:
         key=key,
     ))
 
-#how to use st.cache_resource?
 def _google_calendar_events(window_start, window_end, max_results: int = 250) -> list[dict]:
     """Events from every calendar shown in the user's Google Calendar, colored like Google does."""
     service = get_calendar_service()

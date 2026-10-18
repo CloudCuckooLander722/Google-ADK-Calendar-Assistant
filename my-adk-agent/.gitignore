@@ -5,3 +5,4 @@ credentials.json
 __pycache__/
 *.pyc
 google_oauth_creds.db
+gen-lang-client-*.json

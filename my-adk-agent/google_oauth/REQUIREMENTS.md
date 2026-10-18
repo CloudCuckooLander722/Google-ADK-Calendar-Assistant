@@ -505,6 +505,7 @@ speech clip ─────┘                       input                      
 
 ### 8.10 Verification Checklist
 
+
 - [ ] The chat panel shows `add_col` and `prompt_col` side by side at 1:9,
 	and the calendar panel keeps its width.
 - [ ] Submitting `"   "` with no attachments sends nothing to the agent.
@@ -523,10 +524,13 @@ speech clip ─────┘                       input                      
 - [ ] Forcing `run_adk_sync()` to raise shows an error reply in the chat and
 	leaves the page usable.
 
-### 8.11
-- When, in show_home_page, the widget "Try Workflow" or "Login or Sign Up" is clicked, it is redirected to login_page function. 
+### 8.11 fetch_creds Requirements
 
--login_page must be able to display the login page if st.session_state.logged_in is False, or st.query_params is "False".
-Otherwise, display run_chat_interface or invoke that function.
+- `load_ids` will load a user's id once it has been converted from the email
 
--When refreshed, run_chat_interface must keep the user's credentials and google calendar data.
+- `fetch_creds` will check if there is a user_id in st.session_state or LocalStorage
+
+- It will convert the user_id into a string and pass it into `get_valid_credentials`.
+
+- Exceptions will be handled gracefully with a warning and error message on screen. 
+

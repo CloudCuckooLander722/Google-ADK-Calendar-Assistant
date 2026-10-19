@@ -30,11 +30,11 @@ google = builtins.FAKE_GOOGLE
 class Cookies:
     """The browser only hands its cookies over on the cookie component's
     second run, as the real one does after a refresh."""
+    cookies = {{}}
     def get_all(self, key=None):
         st.session_state["cookie_runs"] = st.session_state.get("cookie_runs", 0) + 1
-        if st.session_state["cookie_runs"] < 2:
-            return {{}}
-        return dict(google["cookies"])
+        self.cookies = {{}} if st.session_state["cookie_runs"] < 2 else dict(google["cookies"])
+        return self.cookies
     def set(self, *a, **k): pass
     def delete(self, *a, **k): pass
 
@@ -91,7 +91,16 @@ def fake_calendar(events, **kwargs):
     st.session_state["shown_events"] = events
 
 
-with mock.patch.object(ol, "get_cookie_manager", lambda: st.session_state.setdefault("cookie_manager", Cookies())), \\
+class EmptyLocalStorage:
+    """AppTest has no browser to run the local-storage component in."""
+    def __init__(self, key=None): pass
+    def getItem(self, key): return None
+    def getAll(self): return {{}}
+    def setItem(self, *a, **k): pass
+
+
+with mock.patch.object(ol, "LocalStorage", EmptyLocalStorage), \\
+     mock.patch.object(ol, "get_cookie_manager", lambda: st.session_state.setdefault("cookie_manager", Cookies())), \\
      mock.patch.object(ol, "get_valid_credentials", fake_credentials), \\
      mock.patch.object(ol, "build", lambda name, version, credentials: Service(credentials.user)), \\
      mock.patch.object(ci, "get_tasks_service", lambda: None), \\
@@ -129,7 +138,7 @@ def google(tmp_path):
 def _open_page(google):
     """A browser loading (or soft-refreshing) the page: a new session, then the
     automatic rerun the cookie component triggers once the cookies arrive."""
-    at = AppTest.from_file(google["app"], default_timeout=60)
+    at = AppTest.from_file(google["app"], default_timeout=15)
     at.run()
     at.run()
     assert not at.exception, [e.message for e in at.exception]
@@ -147,7 +156,7 @@ def _send(at, prompt):
 
 
 def test_calendar_waits_for_cookie_on_first_run_after_refresh(google):
-    at = AppTest.from_file(google["app"], default_timeout=60).run()
+    at = AppTest.from_file(google["app"], default_timeout=15).run()
     assert not at.exception
     assert at.session_state["shown_events"] == []
     assert any("Loading your calendar" in c.value for c in at.caption)
@@ -235,7 +244,7 @@ def test_google_api_errors_show_empty_calendar_not_a_crash(google):
 
 def test_missing_api_key_stops_with_error(google):
     google["api_key"] = None
-    at = AppTest.from_file(google["app"], default_timeout=60).run()
+    at = AppTest.from_file(google["app"], default_timeout=15).run()
     assert any("Google API Key Not Found" in e.value for e in at.error)
     assert "shown_events" not in at.session_state
 

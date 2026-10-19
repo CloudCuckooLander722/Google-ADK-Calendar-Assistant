@@ -26,6 +26,7 @@ import logging
 import requests
 from typing import Optional
 from googleapiclient.discovery import build
+from streamlit_local_storage import LocalStorage
 
 _ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
 
@@ -134,6 +135,9 @@ def _resolve_credentials_path() -> str:
 
 
 credentials_path = _resolve_credentials_path()
+
+# Component key for the browser's local storage, where sign-in saves the user_id.
+LOCAL_STORAGE_KEY = "workflow_local_storage"
 
 # How many runs get_creds waits for the browser's cookies after Google's redirect.
 OAUTH_COOKIE_WAITS_KEY = "oauth_cookie_waits"
@@ -288,6 +292,11 @@ class OAuthLogin:
                 # anything that can read the user's browser storage.
                 self.cookie_manager.set(cookie="user_id", val=str(user_id), key="set_user_id")
                 self.cookie_manager.set(cookie="logged_in", val="true", key="set_logged_in")
+                try:
+                    LocalStorage(key=LOCAL_STORAGE_KEY).setItem("user_id", user_id, key="set_local_user_id")
+                except Exception:
+                    # The cookie above still brings the user back after a refresh.
+                    logging.warning("Failed to save user_id to local storage", exc_info=True)
 
                 self.cookie_manager.delete("oauth_state", key="delete_oauth_state")
 
@@ -323,35 +332,78 @@ def restore_signed_in_user() -> Optional[str]:
         return None
     if isinstance(cookies, dict) and cookies.get("user_id"):
         st.session_state["user_id"] = str(cookies["user_id"])
+    else:
+        # No cookie (cleared, or blocked): sign-in saved the id here too.
+        try:
+            user_id = _local_storage_user_id()
+        except Exception:
+            logging.exception("Failed to read local storage while restoring the signed-in user")
+            user_id = None
+        if user_id:
+            st.session_state["user_id"] = str(user_id)
     return st.session_state.get("user_id")
 
+def _local_storage_user_id() -> Optional[str]:
+    """
+    The user_id sign-in saved in the browser's local storage, or None. Right
+    after a refresh the component hasn't answered yet and holds None instead of
+    a dict (its getItem() would raise on that): that is "not loaded yet", not an
+    error.
+    """
+    # Created at most once per run: a second LocalStorage() in the same run
+    # reuses the first one's value instead of rendering another component.
+    items = LocalStorage(key=LOCAL_STORAGE_KEY).getAll()
+    user_id = items.get("user_id") if isinstance(items, dict) else None
+    return str(user_id) if user_id else None
+
+
+def _user_id_from_browser() -> Optional[str]:
+    """
+    The user_id saved in this browser at sign-in: from local storage, else the
+    user_id cookie. Both are read through frontend components, so right after a
+    refresh they can be empty for one run, until the browser has answered.
+    """
+    user_id = _local_storage_user_id()
+    if user_id:
+        return user_id
+
+    # The cookies restore_signed_in_user() / get_creds() already read this run.
+    # Calling get_all() again would render a second cookie component with the
+    # same key, which Streamlit rejects.
+    cookie_manager = st.session_state.get("cookie_manager")
+    cookies = getattr(cookie_manager, "cookies", None)
+    if isinstance(cookies, dict) and cookies.get("user_id"):
+        return str(cookies["user_id"])
+    return None
+
+
 def fetch_creds():
-    user_id = st.session_state.get("user_id") or st.query_params.get("user_id")
+    """
+    The signed-in user's Google credentials, or None if nobody is signed in.
 
-    if not user_id:
-        cookie_manager = st.session_state.get("cookie_manager")
-        if cookie_manager is not None:
-            try:
-                cookies = cookie_manager.get_all()
-            except Exception:
-                logging.exception("Failed to read cookies while fetching credentials")
-                cookies = {}
-            if isinstance(cookies, dict):
-                user_id = cookies.get("user_id")
-
-    if not user_id:
+    Looks for the user_id in st.session_state, then in the browser's local
+    storage, and passes it (as a string) to get_valid_credentials. Called by
+    the calendar panel and the agent's tools, so it never stops the script.
+    """
+    user_id = st.session_state.get("user_id")
+    try:
+        if not user_id:
+            user_id = _user_id_from_browser()
+        if not user_id:
+            return None
+        user_id = str(user_id)
+        st.session_state["user_id"] = user_id
+        return get_valid_credentials(user_id)
+    except Exception:
+        logging.warning("Could not load Google credentials for user_id=%s", user_id, exc_info=True)
+        st.error("Couldn't load your Google account. Please sign in again.")
         return None
+    finally:
+        # Never leave the user's id in the address bar. Only that param:
+        # clearing every one would also drop logged_in.
+        if "user_id" in st.query_params:
+            del st.query_params["user_id"]
 
-    user_id = str(user_id)
-    st.session_state["user_id"] = user_id
-
-    creds = get_valid_credentials(user_id)
-    # Only drop user_id from the URL: clearing every param would also remove
-    # logged_in, and the next refresh would land on the login page.
-    if "user_id" in st.query_params:
-        del st.query_params["user_id"]
-
-    return creds
 
 def get_calendar_service():
     creds = fetch_creds()

@@ -62,7 +62,8 @@ def st():
     fake.session_state = _State()
     fake.query_params = _State()
     fake.stop.side_effect = _Stopped
-    with mock.patch.object(ol, "st", fake):
+    empty_local_storage = mock.Mock(return_value=mock.Mock(getAll=lambda: {}))
+    with mock.patch.object(ol, "st", fake), mock.patch.object(ol, "LocalStorage", empty_local_storage):
         yield fake
 
 
@@ -280,13 +281,49 @@ def test_fetch_creds_without_any_user_returns_none(st):
     get.assert_not_called()
 
 
-def test_fetch_creds_survives_cookie_component_error(st):
-    st.session_state["cookie_manager"] = _Cookies(raises=True)
-    assert ol.fetch_creds() is None
+@pytest.mark.parametrize("cookies", [None, "junk", {}, {"user_id": ""}])
+def test_fetch_creds_ignores_missing_or_junk_cached_cookies(st, cookies):
+    st.session_state["cookie_manager"] = mock.Mock(cookies=cookies)
+    with mock.patch.object(ol, "get_valid_credentials") as get:
+        assert ol.fetch_creds() is None
+    get.assert_not_called()
+    st.error.assert_not_called()
+
+
+def test_fetch_creds_never_renders_a_second_cookie_component(st):
+    """get_all() renders a component with a fixed key: calling it again in the
+    same run (events, then tasks) raises StreamlitDuplicateElementKey."""
+    cookies = _Cookies({"user_id": "alice"})
+    cookies.get_all = mock.Mock(side_effect=AssertionError("get_all() called from fetch_creds"))
+    st.session_state["cookie_manager"] = cookies
+    with mock.patch.object(ol, "get_valid_credentials", return_value=None) as get:
+        ol.fetch_creds()
+        st.session_state.pop("user_id")
+        ol.fetch_creds()
+    assert get.call_args_list == [mock.call("alice"), mock.call("alice")]
+
+
+@pytest.mark.parametrize("items", [None, "junk", {}])
+def test_fetch_creds_treats_unloaded_local_storage_as_empty(st, items):
+    """Right after a refresh the local-storage component holds None, not a dict."""
+    with mock.patch.object(ol, "LocalStorage", mock.Mock(return_value=mock.Mock(getAll=lambda: items))), \
+         mock.patch.object(ol, "get_valid_credentials") as get:
+        assert ol.fetch_creds() is None
+    get.assert_not_called()
+    st.error.assert_not_called()
+
+
+def test_fetch_creds_prefers_local_storage_over_cookie(st):
+    st.session_state["cookie_manager"] = mock.Mock(cookies={"user_id": "from-cookie"})
+    storage = mock.Mock(return_value=mock.Mock(getAll=lambda: {"user_id": "from-local-storage"}))
+    with mock.patch.object(ol, "LocalStorage", storage), \
+         mock.patch.object(ol, "get_valid_credentials", return_value=None) as get:
+        ol.fetch_creds()
+    get.assert_called_once_with("from-local-storage")
 
 
 def test_fetch_creds_reads_user_id_cookie_and_keeps_it_in_session(st):
-    st.session_state["cookie_manager"] = _Cookies({"user_id": "alice"})
+    st.session_state["cookie_manager"] = mock.Mock(cookies={"user_id": "alice"})
     creds = object()
     with mock.patch.object(ol, "get_valid_credentials", return_value=creds) as get:
         assert ol.fetch_creds() is creds

@@ -234,7 +234,7 @@ def _show_sign_in_card(authenticator: OAuthLogin):
                     <h2>Welcome back</h2>
                     <p>Connect your Google Workspace to begin planning your calendar and task system.</p>
                     <div class="login-button-wrapper"></div>
-                    <div class="terms">Secure sign-in with Google OAuth · <a href="/privacy" target="_self">Privacy Policy</a></div>
+                    <div class="terms">Secure sign-in with Google OAuth · <a href="/privacy" target="_self">Privacy Policy</a> · <a href="/terms_of_service" target="_self">Terms of Service</a></div>
                 </section>
             </div>
         </div>

@@ -29,6 +29,7 @@ def test_home_page_sign_in_links_go_to_login_page():
     assert links["Log in or sign up"] == "/login_page"
     assert links["Try WorkFlow Assistant free"] == "/login_page"
     assert links["Privacy Policy"] == "/privacy"
+    assert links["Terms of Service"] == "/terms_of_service"
     assert links["Home"] == "/"
 
 
@@ -317,3 +318,14 @@ def test_get_creds_stops_waiting_after_a_few_runs(tmp_path):
     for _ in range(4):
         at.run()
     assert at.session_state["exchanged"] == [{}]  # tried once, then gave up waiting
+
+
+def test_sign_in_card_links_to_privacy_policy_and_terms():
+    source = (APP_ROOT / "ui" / "login.py").read_text()
+    assert 'href="/privacy"' in source
+    assert 'href="/terms_of_service"' in source
+
+
+def test_terms_of_service_page_is_routed():
+    source = (APP_ROOT / "main.py").read_text()
+    assert 'url_path="terms_of_service"' in source

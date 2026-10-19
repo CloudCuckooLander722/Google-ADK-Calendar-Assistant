@@ -302,6 +302,7 @@ PAGE = """
     <ul>
         <li><a href="/">Home</a></li>
         <li><a href="/privacy">Privacy Policy</a></li>
+        <li><a href="/terms_of_service">Terms of Service</a></li>
         <li class="wf-nav-cta"><a href="/login_page">Log in or sign up</a></li>
     </ul>
 </nav>

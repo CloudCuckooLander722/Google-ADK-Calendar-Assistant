@@ -20,6 +20,7 @@ from google.oauth2 import id_token as google_id_token
 from google.auth.transport import requests as google_requests
 from google_oauth import creds_db
 from google_oauth.credentials_store import get_valid_credentials
+import datetime
 import functools
 import json
 import logging
@@ -139,6 +140,12 @@ credentials_path = _resolve_credentials_path()
 # Component key for the browser's local storage, where sign-in saves the user_id.
 LOCAL_STORAGE_KEY = "workflow_local_storage"
 
+# The ?code this session already exchanged. Google accepts a code only once,
+# so a rerun that interrupts sign-in must not send it again.
+OAUTH_USED_CODE_KEY = "oauth_used_code"
+# How long the browser keeps the user_id cookie (the library's default is 1 day).
+SIGN_IN_COOKIE_DAYS = 30
+
 # How many runs get_creds waits for the browser's cookies after Google's redirect.
 OAUTH_COOKIE_WAITS_KEY = "oauth_cookie_waits"
 MAX_OAUTH_COOKIE_WAITS = 3
@@ -237,6 +244,31 @@ class OAuthLogin:
             st.error("Sign-in failed. Please try logging in again.")
         return None
 
+    def _finish_sign_in(self, user_id: str):
+        """Signs the user in on this page and saves their user_id in the browser.
+        Safe to run again if a rerun interrupts it."""
+        st.session_state.logged_in = True
+        # Drop Google's ?code=...&state=..., so no later run exchanges it again.
+        st.query_params.clear()
+        st.query_params.logged_in = "True"
+
+        # FIX: cookie now stores only the user_id (a pointer),
+        # not token material. Much smaller trust surface for
+        # anything that can read the user's browser storage.
+        expires_at = datetime.datetime.now() + datetime.timedelta(days=SIGN_IN_COOKIE_DAYS)
+        self.cookie_manager.set(cookie="user_id", val=str(user_id), key="set_user_id", expires_at=expires_at)
+        self.cookie_manager.set(cookie="logged_in", val="true", key="set_logged_in", expires_at=expires_at)
+        try:
+            LocalStorage(key=LOCAL_STORAGE_KEY).setItem("user_id", user_id, key="set_local_user_id")
+        except Exception:
+            # The cookie above still brings the user back after a refresh.
+            logging.warning("Failed to save user_id to local storage", exc_info=True)
+        try:
+            self.cookie_manager.delete("oauth_state", key="delete_oauth_state")
+        except Exception:
+            # Already gone (e.g. deleted by the run a rerun interrupted).
+            pass
+
     def _exchange_code(self, cookies: dict):
         """Exchanges the ?code from Google's redirect for credentials and stores
         them. Returns None (after logging why) if the exchange fails."""
@@ -248,6 +280,17 @@ class OAuthLogin:
         if not query_state:
             logging.warning("OAuth callback missing 'state' query param")
             return None
+
+        user_id = st.session_state.get("user_id")
+        if code and code == st.session_state.get(OAUTH_USED_CODE_KEY) and user_id:
+            # A rerun cut the previous run short after this code was exchanged
+            # (a component's value arriving from the browser interrupts the
+            # run). The credentials are already saved: finish signing in.
+            creds = get_valid_credentials(user_id)
+            if creds is not None:
+                self._finish_sign_in(user_id)
+                return creds
+
         try:
             if saved_state == query_state: #test before starting coding requirements
                 flow = Flow.from_client_secrets_file(
@@ -277,31 +320,18 @@ class OAuthLogin:
                 )
                 user_id = str(id_info["sub"])
                 email = str(id_info.get("email"))
-                st.query_params["user_id"] = user_id
-                st.session_state["user_id"] = user_id
 
                 # FIX: persist full credentials to the encrypted DB, keyed
                 # by user_id. This is what the separate backend function
                 # will read from later -- not cookies.
                 creds_db.upsert_credentials(user_id, creds, email=email)
 
-
-
-                # FIX: cookie now stores only the user_id (a pointer),
-                # not token material. Much smaller trust surface for
-                # anything that can read the user's browser storage.
-                self.cookie_manager.set(cookie="user_id", val=str(user_id), key="set_user_id")
-                self.cookie_manager.set(cookie="logged_in", val="true", key="set_logged_in")
-                try:
-                    LocalStorage(key=LOCAL_STORAGE_KEY).setItem("user_id", user_id, key="set_local_user_id")
-                except Exception:
-                    # The cookie above still brings the user back after a refresh.
-                    logging.warning("Failed to save user_id to local storage", exc_info=True)
-
-                self.cookie_manager.delete("oauth_state", key="delete_oauth_state")
-
-                st.query_params.clear()
-                
+                # Nothing above draws on the page, so no rerun can cut in
+                # before here. Record the sign-in in session_state before
+                # anything below renders a component.
+                st.session_state["user_id"] = user_id
+                st.session_state[OAUTH_USED_CODE_KEY] = code
+                self._finish_sign_in(user_id)
                 return creds
             logging.warning("OAuth callback state did not match the saved oauth_state (saved state present: %s)", bool(saved_state))
             return None

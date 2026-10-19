@@ -49,8 +49,9 @@ class _Cookies:
             raise RuntimeError("cookie component failed")
         return self.cookies
 
-    def set(self, cookie, val, key=None):
+    def set(self, cookie, val, key=None, **options):
         self.set_calls.append((cookie, val))
+        self.options = options
 
     def delete(self, cookie, key=None):
         self.deleted.append(cookie)
@@ -113,6 +114,66 @@ def test_exchange_code_signs_in_and_saves_credentials(st):
     assert ("user_id", "12345") in cookies.set_calls
     assert st.session_state["user_id"] == "12345"
     assert "code" not in st.query_params
+
+
+def test_sign_in_cookie_lasts_longer_than_a_day(st):
+    import datetime
+    _callback(st)
+    cookies = _Cookies()
+    _, flow, verify = _google()
+    _exchange(st, cookies, flow, verify)
+    assert cookies.options["expires_at"] > datetime.datetime.now() + datetime.timedelta(days=7)
+
+
+def test_exchange_code_marks_user_signed_in_before_rendering_anything(st):
+    """A component's value arriving from the browser makes Streamlit abort the
+    run at the next element it draws. Sign-in must already be recorded then."""
+    from streamlit.runtime.scriptrunner_utils.exceptions import RerunException
+    _callback(st)
+    cookies = _Cookies()
+    seen = {}
+
+    def interrupted(cookie, val, key=None, **options):
+        seen.update(user_id=st.session_state.get("user_id"), logged_in=st.session_state.get("logged_in"),
+                    code_in_url="code" in st.query_params)
+        raise RerunException(None)
+
+    cookies.set = interrupted
+    _, flow, verify = _google()
+    with pytest.raises(RerunException):
+        _exchange(st, cookies, flow, verify)
+    assert seen == {"user_id": "12345", "logged_in": True, "code_in_url": False}
+
+
+def test_rerun_after_interrupted_sign_in_does_not_reuse_the_code(st):
+    """Google rejects a code it already accepted (invalid_grant): a rerun with
+    the same ?code must finish signing in from the saved credentials."""
+    _callback(st)
+    st.session_state["user_id"] = "12345"
+    st.session_state[ol.OAUTH_USED_CODE_KEY] = "good-code"
+    cookies = _Cookies()
+    _, flow, verify = _google()
+    saved = object()
+    with mock.patch.object(ol, "get_valid_credentials", return_value=saved) as get:
+        result, upsert = _exchange(st, cookies, flow, verify)
+    assert result is saved
+    get.assert_called_once_with("12345")
+    flow.fetch_token.assert_not_called()
+    upsert.assert_not_called()
+    assert ("user_id", "12345") in cookies.set_calls
+    assert st.session_state["logged_in"] is True
+    assert "code" not in st.query_params
+
+
+def test_a_new_code_is_still_exchanged_after_an_earlier_sign_in(st):
+    _callback(st, code="new-code")
+    st.session_state["user_id"] = "12345"
+    st.session_state[ol.OAUTH_USED_CODE_KEY] = "old-code"
+    cookies = _Cookies()
+    creds, flow, verify = _google()
+    result, _ = _exchange(st, cookies, flow, verify)
+    assert result is creds
+    flow.fetch_token.assert_called_once()
 
 
 @pytest.mark.parametrize("state", [None, ""])

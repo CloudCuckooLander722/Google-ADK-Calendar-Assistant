@@ -524,13 +524,15 @@ speech clip ─────┘                       input                      
 - [ ] Forcing `run_adk_sync()` to raise shows an error reply in the chat and
 	leaves the page usable.
 
-### 8.11 fetch_creds Requirements
+## 9. `google_oauth` Requirements
 
-- `load_ids` will load a user's id once it has been converted from the email
+### 9.1 oauth_login.py
 
-- `fetch_creds` will check if there is a user_id in st.session_state or LocalStorage
+- [ ] `class OAuthLogin` has 4 methods
+- `init_flow` initalizes the `Flow` instance and returns the authorization url.
+- `login_link` activates the user login, populates state
 
-- It will convert the user_id into a string and pass it into `get_valid_credentials`.
+- `download_creds` takes the code from `st.query_params` and after PCKE verification, downloads the credentials into Firestore.
+It also sets user_id into st.session_state, then into CookieController. After that, it is the key when the credentials are downloaded into Firestore.
 
-- Exceptions will be handled gracefully with a warning and error message on screen. 
 

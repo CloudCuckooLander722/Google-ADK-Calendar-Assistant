@@ -6,3 +6,6 @@ __pycache__/
 *.pyc
 google_oauth_creds.db
 gen-lang-client-*.json
+# Local debug output
+*.log
+check_tz.py

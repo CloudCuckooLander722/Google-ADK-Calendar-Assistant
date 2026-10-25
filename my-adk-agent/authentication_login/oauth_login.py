@@ -117,8 +117,10 @@ class OAuthLogin:
         )
         code_verifier = flow.code_verifier
 
-        cookie_controller.set_cookie("oauth_state", state)
-        cookie_controller.set_cookie("code_verifier", code_verifier)
+        cookie_controller.set("oauth_state", state)
+        cookie_controller.set("code_verifier", code_verifier)
+        st.query_params["oauth_state"] = state
+        st.query_params["code_verifier"] = code_verifier
         
 
         return authorization_url, flow
@@ -132,7 +134,7 @@ class OAuthLogin:
         st.link_button(
             label="Login with Google",
             url=authorization_url,
-            new_tab=True
+            
         )
 
         
@@ -150,6 +152,8 @@ class OAuthLogin:
 
         if cookie_controller.get("code_verifier"):
             pkce_verifier = cookie_controller.get("code_verifier")
+        else:
+            pkce_verifier = st.query_params.get("code_verifier")
 
         assert pkce_verifier is not None, "pkce_verifier is None."
         
@@ -177,7 +181,7 @@ class OAuthLogin:
         id_info = id_token.verify_oauth2_token(
             creds.id_token, 
             google_requests.Request(), 
-            "YOUR_GOOGLE_CLIENT_://googleusercontent.com"
+            "YOUR_GOOGLE_CLIENT_://googleusercontent.com" #placeholder? what to do
         )
 
         user_id = id_info["sub"]
@@ -194,6 +198,9 @@ class OAuthLogin:
             "email": user_email,
             "creds_json": creds.to_json()  # Saves token, refresh_token, scopes, etc.
         })
+
+        st.query_params["user_id"] = user_id
+        cookie_controller.set("user_id", user_id)
 
 
 

@@ -535,4 +535,10 @@ speech clip ─────┘                       input                      
 - `download_creds` takes the code from `st.query_params` and after PCKE verification, downloads the credentials into Firestore.
 It also sets user_id into st.session_state, then into CookieController. After that, it is the key when the credentials are downloaded into Firestore.
 
+### 9.2 creds_db.py
 
+- `get_creds_dict` gets a dictionary based off the user_id from st.query_params
+
+- loads the credentials and uses `_encrypt()` to hide sensitive information.
+
+- 

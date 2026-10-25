@@ -468,3 +468,62 @@ def test_get_valid_credentials_returns_the_users_credentials(creds_db, tmp_path,
     assert result.token == ACCESS_TOKEN
     assert result.refresh_token == REFRESH_TOKEN
     assert result.client_id == CLIENT_ID
+
+
+# --- upsert_credentials -------------------------------------------------------
+
+def _google_credentials(**overrides):
+    from google.oauth2.credentials import Credentials
+    fields = dict(token=ACCESS_TOKEN, refresh_token=REFRESH_TOKEN, token_uri=TOKEN_URI,
+                  client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=list(SCOPES))
+    fields.update(overrides)
+    creds = Credentials(**fields)
+    creds.expiry = EXPIRY.replace(tzinfo=None)  # google-auth keeps expiry as naive UTC
+    return creds
+
+
+def _upsert(creds_db, *args, **kwargs):
+    function = getattr(creds_db, "upsert_credentials", None)
+    assert function is not None, "creds_db must define upsert_credentials(user_id, creds, email)"
+    function(*args, **kwargs)
+
+
+def test_upsert_credentials_saves_one_document_keyed_by_user_id(creds_db, firestore_db):
+    _upsert(creds_db, GOOGLE_USER_ID, _google_credentials(), email=GOOGLE_EMAIL)
+    _upsert(creds_db, GOOGLE_USER_ID, _google_credentials(), email=GOOGLE_EMAIL)
+    assert list(firestore_db.docs) == [("users", GOOGLE_USER_ID)], \
+        f"signing in twice must update users/{GOOGLE_USER_ID}, not add documents: {list(firestore_db.docs)}"
+    assert firestore_db.docs[("users", GOOGLE_USER_ID)]["email"] == GOOGLE_EMAIL
+
+
+def test_upsert_credentials_encrypts_the_tokens(creds_db, firestore_db):
+    _upsert(creds_db, GOOGLE_USER_ID, _google_credentials(), email=GOOGLE_EMAIL)
+    doc = firestore_db.docs[("users", GOOGLE_USER_ID)]
+    stored = repr(doc)
+    for secret in (ACCESS_TOKEN, REFRESH_TOKEN, CLIENT_SECRET):
+        assert secret not in stored, f"{secret[:12]}... saved in plain text"
+    assert FERNET.decrypt(doc["refresh_token"].encode()).decode() == REFRESH_TOKEN
+
+
+def test_upsert_credentials_keeps_the_refresh_token_when_none_is_given(creds_db, firestore_db):
+    """REQUIREMENTS.md 2.2: an access-token refresh has no refresh token, and
+    must not erase the stored one."""
+    _upsert(creds_db, GOOGLE_USER_ID, _google_credentials(), email=GOOGLE_EMAIL)
+    _upsert(creds_db, GOOGLE_USER_ID, _google_credentials(token="ya29.refreshed", refresh_token=None))
+    doc = firestore_db.docs[("users", GOOGLE_USER_ID)]
+    assert doc.get("refresh_token"), "the stored refresh token was erased"
+    assert FERNET.decrypt(doc["refresh_token"].encode()).decode() == REFRESH_TOKEN
+    assert FERNET.decrypt(doc["access_token"].encode()).decode() == "ya29.refreshed"
+    assert doc.get("email") == GOOGLE_EMAIL, "a write without email must keep the stored email"
+
+
+def test_upsert_then_get_valid_credentials_round_trips(creds_db, tmp_path, firestore_db):
+    _upsert(creds_db, GOOGLE_USER_ID, _google_credentials(), email=GOOGLE_EMAIL)
+    result, error = _run_page(tmp_path, creds_db.get_valid_credentials, {"user_id": GOOGLE_USER_ID})
+    if error is not None:
+        pytest.fail(f"get_valid_credentials() raised {_describe(error)}")
+    assert result.token == ACCESS_TOKEN
+    assert result.refresh_token == REFRESH_TOKEN
+    assert result.client_secret == CLIENT_SECRET
+    assert list(result.scopes or []) == SCOPES
+    assert result.expiry == EXPIRY.replace(tzinfo=None)

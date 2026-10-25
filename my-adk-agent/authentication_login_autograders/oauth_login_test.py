@@ -258,15 +258,19 @@ def oauth(monkeypatch, client_secrets_file, firestore_db, browser):
 
     cookie_module = types.ModuleType("cookie_service")
     cookie_module.controller = browser.cookies
-    creds_db_module = types.ModuleType("authentication_login.creds_db")
-    creds_db_module.get_db = lambda: firestore_db
-    for name, module in {
-        "cookie_service": cookie_module,
-        "services.cookie_service": cookie_module,
-        "authentication_login.creds_db": creds_db_module,
-    }.items():
-        monkeypatch.setitem(sys.modules, name, module)
+    for name in ("cookie_service", "services.cookie_service"):
+        monkeypatch.setitem(sys.modules, name, cookie_module)
     monkeypatch.delitem(sys.modules, MODULE_UNDER_TEST, raising=False)
+
+    # The real creds_db (it does the encrypting), on the fake Firestore.
+    monkeypatch.delitem(sys.modules, "authentication_login.creds_db", raising=False)
+    try:
+        creds_db = importlib.import_module("authentication_login.creds_db")
+    except Exception as error:
+        pytest.fail(f"authentication_login.creds_db does not import: {type(error).__name__}: {error}")
+    monkeypatch.setattr(creds_db, "get_db", lambda: firestore_db)
+    if "authentication_login" in sys.modules:
+        monkeypatch.setattr(sys.modules["authentication_login"], "creds_db", creds_db, raising=False)
 
     # Fill in names the module never defines (graded separately) through
     # builtins, where Python looks after the module's own globals.
@@ -556,7 +560,7 @@ def test_download_creds_saves_what_is_needed_to_refresh(signed_in):
 
 def test_download_creds_does_not_store_tokens_in_plain_text(signed_in):
     """The Privacy Policy says tokens are stored encrypted (Fernet, GOOGLE_CREDS_ENCRYPTION_KEY)."""
-    stored = json.dumps(_saved_doc(signed_in))
+    stored = json.dumps(_saved_doc(signed_in), default=str)
     assert REFRESH_TOKEN not in stored, "refresh token saved in plain text"
     assert ACCESS_TOKEN not in stored, "access token saved in plain text"
 

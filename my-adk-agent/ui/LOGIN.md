@@ -19,8 +19,11 @@
 
 - [] retrieves user_id from cookie_controller defined as cookie_service.controller() 
 
-### 1.22 `retrieve_conversation` requirements
+### 1.22 `current_conversation` requirements
 
-- [] params user_id
-- [] retrieves conversation (messages) from cookie_controller and displays it in `run_chat_interface`
+- [] params runner, user_id
+- [] retrieves the user's conversation (messages) for this browser tab and displays it in `run_chat_interface`
+- [] the tab is identified by a tab id kept in the browser's sessionStorage: a refresh keeps the tab id, so the conversation comes back
+- [] a new tab or a later visit gets a new tab id and starts with an empty conversation, which replaces the old one (at most one conversation per user in memory)
+- [] the conversation is never saved in a cookie
 

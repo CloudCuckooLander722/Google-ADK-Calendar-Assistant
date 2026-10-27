@@ -3,8 +3,8 @@ import asyncio
 import logging
 import time
 import os
-import threading
 import requests
+import threading
 from dataclasses import dataclass, field
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
@@ -189,10 +189,9 @@ def content(prompt: str | None = None,
 def initialize_adk() -> Runner:
     """
     The ADK Runner and its in-memory session service. st.cache_resource builds
-    them once per server process and shares them with every browser session,
-    so a conversation's history survives page refreshes. Per-user state lives
-    in the sessions inside it (see get_conversation), never in the cached object
-    itself.
+    them once per server process and shares them with every browser session.
+    Per-user state lives in the sessions inside it (see start_conversation),
+    never in the cached object itself.
     """
     session_service = InMemorySessionService() # ADK's default in-memory session service for storing session data.
     return Runner( # The ADK Runner orchestrates the agent's execution.
@@ -205,52 +204,82 @@ def initialize_adk() -> Runner:
 
 @dataclass
 class Conversation:
-    """One signed-in user's chat: the ADK session holding the agent's context,
+    """One browser tab's chat: the ADK session holding the agent's context,
     the messages shown in the chat panel, and a counter bumped whenever the
-    agent may have changed their calendar (it keys the calendar cache)."""
+    agent may have changed the calendar (it keys the calendar cache). tab_id
+    is the browser tab it belongs to: a refresh keeps it, a new visit doesn't."""
+    user_key: str
+    tab_id: str
     session_id: str
     messages: list[dict] = field(default_factory=list)
     calendar_version: int = 0
 
 
+async def _create_session(runner: Runner, conversation: Conversation):
+    await runner.session_service.create_session(
+        app_name=APP_NAME_FOR_ADK,
+        user_id=conversation.user_key,
+        session_id=conversation.session_id,
+        state=INITIAL_STATE, # Initialize with predefined state.
+    )
+
+
+def start_conversation(runner: Runner, user_key: str, tab_id: str) -> Conversation:
+    """
+    A new, empty conversation. The user's earlier ADK sessions are deleted
+    first: nothing from a previous visit is carried over, and their history
+    (attachment bytes included) doesn't pile up in the server's memory.
+    """
+    conversation = Conversation(user_key=user_key, tab_id=tab_id, session_id=f"chat_{int(time.time())}_{os.urandom(4).hex()}")
+
+    async def start():
+        earlier = await runner.session_service.list_sessions(app_name=APP_NAME_FOR_ADK, user_id=user_key)
+        for session in earlier.sessions:
+            await runner.session_service.delete_session(
+                app_name=APP_NAME_FOR_ADK, user_id=user_key, session_id=session.id,
+            )
+        await _create_session(runner, conversation)
+
+    asyncio.run(start())
+    return conversation
+
+
 @st.cache_resource
 def _conversation_store() -> tuple[dict[str, Conversation], threading.Lock]:
-    """Every user's Conversation, keyed by their Google account id. Cached like
-    the runner, so it outlives each browser session (and therefore refreshes)."""
+    """Each user's current Conversation, keyed by their Google account id.
+    Cached like the runner, so it outlives a browser session (a refresh)."""
     return {}, threading.Lock()
 
 
-def find_conversation(user_key: str) -> Conversation | None:
-    """The user's conversation if they have one, without creating it."""
-    conversations, _ = _conversation_store()
-    return conversations.get(user_key)
-
-
-def get_conversation(runner: Runner, user_key: str) -> Conversation:
+def get_conversation(runner: Runner, user_key: str, tab_id: str) -> Conversation:
     """
-    The user's conversation, created on first use. Also recreates its ADK
-    session if the session service lost it (e.g. after st.cache_resource.clear()).
+    The user's conversation in this browser tab. A refresh keeps the tab_id,
+    so it gets the same conversation back. A new tab or a later visit has a new
+    tab_id and starts a clean one, which replaces the old: each user has at
+    most one conversation in memory.
     """
     conversations, lock = _conversation_store()
     with lock:
         conversation = conversations.get(user_key)
-        if conversation is None:
-            conversation = Conversation(session_id=f"chat_{int(time.time())}_{os.urandom(4).hex()}")
+        if conversation is None or conversation.tab_id != tab_id:
+            conversation = start_conversation(runner, user_key, tab_id)
             conversations[user_key] = conversation
+    return conversation
 
+
+def ensure_session(runner: Runner, conversation: Conversation) -> None:
+    """
+    Recreates the conversation's ADK session if it is gone: another tab of the
+    same user started a conversation (which deletes this one's session), or the
+    server's cache was cleared. The agent then starts this tab's context afresh.
+    """
     # get_session/create_session are async - they must be awaited (via
     # asyncio.run here); a bare coroutine object is always truthy.
     session = asyncio.run(runner.session_service.get_session(
-        app_name=APP_NAME_FOR_ADK, user_id=user_key, session_id=conversation.session_id,
+        app_name=APP_NAME_FOR_ADK, user_id=conversation.user_key, session_id=conversation.session_id,
     ))
     if not session:
-        asyncio.run(runner.session_service.create_session(
-            app_name=APP_NAME_FOR_ADK,
-            user_id=user_key,
-            session_id=conversation.session_id,
-            state=INITIAL_STATE, # Initialize with predefined state.
-        ))
-    return conversation
+        asyncio.run(_create_session(runner, conversation))
 
 async def run_adk_async(runner: Runner, user_key: str, session_id: str, content: genai_types.Content | str):
     """

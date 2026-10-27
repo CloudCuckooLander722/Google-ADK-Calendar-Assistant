@@ -18,9 +18,10 @@ import streamlit as st
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
-from services.cookie_service import controller as cookie_controller
+from services.cookie_service import controller 
 from authentication_login import creds_db
 
+cookie_controller = controller()
 
 SCOPES = [
     'openid',

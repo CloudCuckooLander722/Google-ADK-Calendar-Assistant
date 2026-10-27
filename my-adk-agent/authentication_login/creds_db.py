@@ -7,8 +7,10 @@ import os
 from google.cloud import firestore
 from cryptography.fernet import Fernet, InvalidToken
 import streamlit as st
-from services.cookie_service import controller as cookie_controller
+from services.cookie_service import controller
 from google.oauth2.credentials import Credentials
+
+cookie_controller = controller()
 
 _ENCRYPTION_KEY = os.environ.get("GOOGLE_CREDS_ENCRYPTION_KEY")
 if not _ENCRYPTION_KEY:

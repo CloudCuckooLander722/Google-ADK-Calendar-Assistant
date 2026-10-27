@@ -29,7 +29,7 @@ from google_oauth.oauth_login import (
     OAuthLogin, get_calendar_service, get_tasks_service, get_drive_access_token,
     get_picker_app_id, restore_signed_in_user,
 )
-from cookie_service import controller as cookie_controller
+from cookie_service import controller 
 
 
 # One height for both panels so the chat box and the calendar always match.

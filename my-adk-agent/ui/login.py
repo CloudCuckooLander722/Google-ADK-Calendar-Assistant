@@ -11,262 +11,100 @@ for base in (str(PROJECT_ROOT), str(APP_ROOT)):
         sys.path.insert(0, base)
 
 import streamlit as st
-from google_oauth.oauth_login import OAuthLogin
-from ui.chat_interface import run_chat_interface
+from authentication_login.oauth_login import OAuthLogin
+from services.cookie_service import controller
+from services.api_services import check_creds
+from ui.chat_interface import run_chat_interface, restore_signed_in_user
 
 # Query parameters Google adds when it sends the user back after sign-in.
 GOOGLE_REDIRECT_PARAMS = ("code", "state", "scope", "iss", "authuser", "prompt", "hd")
+# How many runs login() waits for the browser's cookies after Google's redirect.
+OAUTH_COOKIE_WAITS_KEY = "oauth_cookie_waits"
+MAX_OAUTH_COOKIE_WAITS = 2
+# The user_id whose stored credentials this session already found working.
+CREDS_CHECKED_KEY = "creds_checked_for"
 
 
-def login():
+def login(authenticator: OAuthLogin):
     """
-    Logs in the user and authenticates their credentials.
+    Finishes a sign-in Google redirected back here (download_creds), or shows
+    the login link.
+    Args: authenticator
+    Returns: None
     """
-    authenticator = OAuthLogin()
 
-    # Back from Google (?code=...): finish signing in without drawing the card,
-    # so login_page can show the chat in this same run.
-    if "code" not in st.query_params:
-        _show_sign_in_card(authenticator)
-    creds = authenticator.get_creds()
-    if creds is not None:
-        st.session_state.logged_in = True
-        st.query_params.logged_in = "True"
-        return
+    st.set_page_config(
+        page_title="Login Panel",
+        page_icon="🔒",
+        layout="centered"
+    )
 
     if "code" in st.query_params:
-        # The code didn't work (expired, or already used by an earlier run):
-        # drop Google's parameters so the card offers "Log in with Google" again.
-        for key in GOOGLE_REDIRECT_PARAMS:
-            if key in st.query_params:
-                del st.query_params[key]
-        _show_sign_in_card(authenticator)
+        # Google's redirect is a fresh page load: the cookie component sends
+        # the browser's cookies (with the oauth_state and code_verifier to
+        # check the code against) only after its first run, then reruns.
+        waits = st.session_state.get(OAUTH_COOKIE_WAITS_KEY, 0)
+        if not controller().getAll() and waits < MAX_OAUTH_COOKIE_WAITS:
+            st.session_state[OAUTH_COOKIE_WAITS_KEY] = waits + 1
+            st.stop()
 
+        # Before login_link: it saves a new oauth_state and code_verifier.
+        creds = authenticator.download_creds()
 
-def _show_sign_in_card(authenticator: OAuthLogin):
-    """Draws the sign-in card with the "Log in with Google" button. Stops the
-    script there until the user goes to Google and comes back with a code."""
-    st.markdown(
-        """
-        <style>
-        @import url('https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,300..800;1,300..800&display=swap');
-
-        .login-wrapper {
-            min-height: 84vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background:
-                radial-gradient(circle at 72% 16%, rgba(126, 222, 195, 0.13), transparent 18%),
-                radial-gradient(circle at 50% 84%, rgba(122, 119, 255, 0.12), transparent 22%),
-                linear-gradient(180deg, #eef7f6 0%, #eef3f8 100%);
-            font-family: 'Open Sans', Arial, sans-serif;
-            color: #172033;
-        }
-
-        .login-card {
-            width: min(880px, 92vw);
-            display: grid;
-            grid-template-columns: 1fr 0.85fr;
-            background: rgba(255,255,255,0.84);
-            border: 1px solid rgba(255,255,255,0.95);
-            border-radius: 36px;
-            box-shadow: 0 55px 160px rgba(20,33,61,0.18);
-            backdrop-filter: blur(18px);
-            overflow: hidden;
-        }
-
-        .login-panel-left {
-            padding: 50px 50px;
-            background: linear-gradient(140deg, #14213d 0%, #223b59 100%);
-            color: #eefcf8;
-            position: relative;
-            min-height: 420px;
-        }
-
-        .login-panel-left:after {
-            content: '';
-            width: 200px;
-            height: 200px;
-            border-radius: 50%;
-            border: 1px solid rgba(255,255,255,0.4);
-            position: absolute;
-            right: -40px;
-            top: -40px;
-            box-shadow: inset 0 0 0 14px rgba(255,255,255,0.05);
-        }
-
-        .login-panel-left .brand {
-            font-size: 28px;
-            font-weight: 900;
-            letter-spacing: -0.04em;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .login-panel-left .brand span {
-            width: 40px;
-            height: 40px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 50%;
-            background: #eefcf8;
-            color: #14213d;
-            font-size: 18px;
-            font-weight: 900;
-        }
-
-        .login-panel-left .headline {
-            margin-top: 56px;
-            font-size: clamp(40px, 3vw, 58px);
-            line-height: 1.05;
-            font-weight: 800;
-            letter-spacing: -0.045em;
-            max-width: 420px;
-        }
-
-        .login-panel-left .tagline {
-            margin-top: 22px;
-            color: rgba(238,252,248,0.8);
-            font-size: 14px;
-            line-height: 1.9;
-            max-width: 420px;
-            font-weight: 600;
-        }
-
-        .login-panel-left .mini-grid {
-            display: flex;
-            gap: 12px;
-            margin-top: 50px;
-            flex-wrap: wrap;
-        }
-
-        .login-panel-left .mini-grid span {
-            padding: 8px 12px;
-            border-radius: 999px;
-            border: 1px solid rgba(238,252,248,0.35);
-            font-size: 11px;
-            font-weight: 800;
-            color: #eefcf8;
-            background: rgba(255,255,255,0.03);
-        }
-
-        .login-panel-right {
-            background: #ffffff;
-            padding: 46px 40px;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-        }
-
-        .login-panel-right .small-label {
-            color: #5b687b;
-            font-size: 11px;
-            font-weight: 900;
-            letter-spacing: 0.14em;
-            text-transform: uppercase;
-            margin-bottom: 16px;
-        }
-
-        .login-panel-right h2 {
-            color: #14213d;
-            font-size: 34px;
-            line-height: 1.2;
-            font-weight: 800;
-            letter-spacing: -0.035em;
-            margin-bottom: 14px;
-        }
-
-        .login-panel-right p {
-            color: #56616f;
-            font-size: 14px;
-            line-height: 1.8;
-            margin-bottom: 24px;
-        }
-
-        .login-panel-right .login-button {
-            width: 100%;
-            background: #14213d;
-            color: #eefcf8;
-            border: none;
-            border-radius: 14px;
-            padding: 14px 20px;
-            font-size: 14px;
-            font-weight: 900;
-            letter-spacing: 0.08em;
-            cursor: pointer;
-        }
-
-        .login-panel-right .login-button:hover {
-            background: #223b59;
-        }
-
-        .login-panel-right .terms {
-            margin-top: 20px;
-            color: #56616f;
-            font-size: 11px;
-            font-weight: 600;
-            line-height: 1.8;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(
-        """
-        <div class="login-wrapper">
-            <div class="login-card">
-                <section class="login-panel-left">
-                    <div class="brand"><span>W</span>WorkFlow</div>
-                    <div class="headline">Plan clearer. Work deeper.</div>
-                    <div class="tagline">Turn your schedule into a simple operating system for your priorities.</div>
-                    <div class="mini-grid">
-                        <span>Calendar</span>
-                        <span>Tasks</span>
-                        <span>Focus</span>
-                    </div>
-                </section>
-                <section class="login-panel-right">
-                    <div class="small-label">Workspace access</div>
-                    <h2>Welcome back</h2>
-                    <p>Connect your Google Workspace to begin planning your calendar and task system.</p>
-                    <div class="login-button-wrapper"></div>
-                    <div class="terms">Secure sign-in with Google OAuth · <a href="/privacy" target="_self">Privacy Policy</a></div>
-                </section>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # Keep the authorized Google OAuth flow intact while showing a polished card interface.
-    authenticator.login()
-
-
-def login_page():
-    """
-    The /login page: the sign-in card while signed out, the chat workspace
-    once signed in.
-
-    A refresh starts a new Streamlit session with an empty session_state, but
-    the ?logged_in=True query parameter stays in the URL, so the user goes
-    straight back to the chat. run_chat_interface then restores their
-    credentials from the user_id cookie, and their conversation and calendar
-    from the server-side cache.
-    """
-    if st.query_params.get("logged_in") == "True":
-        st.session_state.logged_in = True
-
-    if not st.session_state.get("logged_in"):
-        st.query_params.logged_in = "False"
-        login()
-        if not st.session_state.get("logged_in"):
+        # The code is single use: a refresh mustn't try to exchange it again.
+        for param in GOOGLE_REDIRECT_PARAMS:
+            st.query_params.pop(param, None)
+        if creds is not None:
+            st.query_params["logged_in"] = "True"
+            # Shown in this run rather than after st.rerun(): the user_id
+            # cookie is written by a component that a rerun could drop
+            # before the browser runs it.
+            run_chat_interface()
             return
-        # Signed in during this run: show the chat now. st.rerun() here would
-        # cut the run short before the browser saves the user_id cookie, and
-        # the next refresh would no longer know who the user is.
 
-    run_chat_interface()
+    st.title("WorkFlow Assistant")
+    st.write("Sign in with Google to plan your day with your calendar and tasks.")
+    authenticator.login_link()
+    st.caption("[Privacy Policy](/privacy) · [Terms of Service](/terms_of_service)")
+
+
+def _has_credentials(user_id: str | None) -> bool:
+    """
+    Whether user_id has Google credentials that still work. A user_id cookie
+    alone isn't enough: it can outlive the stored credentials (deleted, revoked,
+    or saved by an older version of the app), which would show an empty chat
+    and calendar with no way to sign in. Checked once per session.
+    """
+    if not user_id:
+        return False
+    if st.session_state.get(CREDS_CHECKED_KEY) == user_id:
+        return True
+    if check_creds() is None:
+        # Forget the stale id, so nothing else this run uses it.
+        st.session_state.pop("user_id", None)
+        return False
+    st.session_state[CREDS_CHECKED_KEY] = user_id
+    return True
+
+
+def login_page(authenticator: OAuthLogin | None = None):
+    """
+    Checks st.query_params to see whether st.query_params["logged_in"] is true or false, before logging in.
+    Shows the chat interface to a signed-in user (also after a refresh, from
+    their user_id cookie), and login() to everyone else.
+    """
+    # Who is signed in comes from the session or the cookie, never the URL.
+    st.query_params.pop("user_id", None)
+    authenticator = authenticator or OAuthLogin()
+
+    if (
+        "code" not in st.query_params
+        and st.query_params.get("logged_in") != "False"
+        and _has_credentials(restore_signed_in_user())
+    ):
+        st.query_params["logged_in"] = "True"
+        run_chat_interface()
+    else:
+        if "code" not in st.query_params:
+            st.query_params["logged_in"] = "False"
+        login(authenticator)

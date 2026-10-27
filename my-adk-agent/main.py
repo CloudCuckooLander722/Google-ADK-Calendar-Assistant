@@ -14,6 +14,7 @@ import streamlit as st
 from ui.home import show_home_page
 from ui.login import login_page
 from ui.privacy import show_privacy_page
+from ui.terms_of_service import show_terms_of_service_page
 
 
 def main():
@@ -29,9 +30,11 @@ def main():
     # verification requires a privacy policy reachable without signing in.
     privacy_page = st.Page(show_privacy_page, title="Privacy Policy", icon="🔒", url_path="privacy")
 
+    terms_of_service_page = st.Page(show_terms_of_service_page, title="Terms of Service", icon="📜", url_path="terms_of_service")
+
     # Each page draws its own navigation (the home page header, the login
     # card's links), so Streamlit's page menu is hidden.
-    pg = st.navigation([home_page, workspace_page, privacy_page], position="hidden")
+    pg = st.navigation([home_page, workspace_page, privacy_page, terms_of_service_page], position="hidden")
 
     # Google sends the user back to OAUTH_REDIRECT_URI, the site root (the home
     # page), with ?code=...&state=...: hand those to the login page so the

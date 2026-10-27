@@ -505,6 +505,7 @@ speech clip ─────┘                       input                      
 
 ### 8.10 Verification Checklist
 
+
 - [ ] The chat panel shows `add_col` and `prompt_col` side by side at 1:9,
 	and the calendar panel keeps its width.
 - [ ] Submitting `"   "` with no attachments sends nothing to the agent.
@@ -523,10 +524,21 @@ speech clip ─────┘                       input                      
 - [ ] Forcing `run_adk_sync()` to raise shows an error reply in the chat and
 	leaves the page usable.
 
-### 8.11
-- When, in show_home_page, the widget "Try Workflow" or "Login or Sign Up" is clicked, it is redirected to login_page function. 
+## 9. `google_oauth` Requirements
 
--login_page must be able to display the login page if st.session_state.logged_in is False, or st.query_params is "False".
-Otherwise, display run_chat_interface or invoke that function.
+### 9.1 oauth_login.py
 
--When refreshed, run_chat_interface must keep the user's credentials and google calendar data.
+- [ ] `class OAuthLogin` has 4 methods
+- `init_flow` initalizes the `Flow` instance and returns the authorization url.
+- `login_link` activates the user login, populates state
+
+- `download_creds` takes the code from `st.query_params` and after PCKE verification, downloads the credentials into Firestore.
+It also sets user_id into st.session_state, then into CookieController. After that, it is the key when the credentials are downloaded into Firestore.
+
+### 9.2 creds_db.py
+
+- `get_creds_dict` gets a dictionary based off the user_id from st.query_params
+
+- loads the credentials and uses `_encrypt()` to hide sensitive information.
+
+- 

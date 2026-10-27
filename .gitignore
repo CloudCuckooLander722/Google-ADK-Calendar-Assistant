@@ -6,3 +6,5 @@ __pycache__/
 *.db
 credentials.json
 .DS_Store
+my-adk-agent/gen-lang-client-*.json
+

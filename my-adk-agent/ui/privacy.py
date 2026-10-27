@@ -19,7 +19,7 @@ EFFECTIVE_DATE = "October 7, 2026"
 # check the app against. Update it whenever scopes, storage, or the services
 # user data is sent to change.
 POLICY = f"""
-# WorkFlow Privacy Policy
+# WorkFlow Assistant Privacy Policy
 
 **Effective date:** {EFFECTIVE_DATE}
 
@@ -135,31 +135,4 @@ def show_privacy_page():
     st.markdown(POLICY)
 
     st.divider()
-    st.markdown("### Delete my data")
-    from google_oauth.oauth_login import restore_signed_in_user, delete_my_data
-    # After a refresh, bring back the signed-in user from their cookie.
-    user_id = restore_signed_in_user()
-    if not user_id:
-        st.caption(
-            "Sign in first to delete your data here, or use one of the other options "
-            "under \"Deleting your data\" above."
-        )
-        return
-
-    confirmed = st.checkbox(
-        "I understand this disconnects WorkFlow from my Google account and signs me out."
-    )
-    if st.button("Delete my data", type="primary", disabled=not confirmed):
-        try:
-            delete_my_data(user_id)
-        except Exception:
-            logging.exception("Failed to delete data for user_id=%s", user_id)
-            st.error(
-                f"Something went wrong deleting your data. Please try again, or email "
-                f"{CONTACT_EMAIL}."
-            )
-        else:
-            st.success(
-                "Your data has been deleted and WorkFlow's access to your Google account "
-                "has been revoked. You are signed out."
-            )
+    

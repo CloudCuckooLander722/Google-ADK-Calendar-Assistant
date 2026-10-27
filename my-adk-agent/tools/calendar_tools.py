@@ -9,7 +9,7 @@ for base in (str(PROJECT_ROOT), str(APP_ROOT)):
     if base not in sys.path:
         sys.path.insert(0, base)
 
-from google_oauth.oauth_login import get_calendar_service, get_tasks_service
+from services.api_services import get_calendar_service, get_tasks_service
 from ui.fetch_timezone import fetch_timezone
 
 import datetime

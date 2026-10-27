@@ -12,16 +12,16 @@ for base in (str(PROJECT_ROOT), str(APP_ROOT)):
     if base not in sys.path:
         sys.path.insert(0, base)
 
+import datetime
+import functools
 import json
 import logging
 import streamlit as st
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
-from services.cookie_service import controller 
+from services.cookie_service import controller as cookie_controller
 from authentication_login import creds_db
-
-cookie_controller = controller()
 
 SCOPES = [
     'openid',
@@ -102,6 +102,30 @@ def _resolve_credentials_path() -> str:
 
 
 credentials_path = _resolve_credentials_path()
+
+# How long the browser keeps the user_id cookie (CookieController's default is 1 day).
+USER_ID_COOKIE_DAYS = 30
+DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
+
+
+def _cookie_expiry() -> datetime.datetime:
+    return datetime.datetime.now() + datetime.timedelta(days=USER_ID_COOKIE_DAYS)
+
+
+@functools.cache
+def get_picker_app_id() -> str | None:
+    """
+    The Cloud project number, which the Google Picker wants as its app ID. An
+    OAuth client ID always starts with it: "<project number>-<hash>.apps.googleusercontent.com".
+    """
+    try:
+        with open(credentials_path) as f:
+            secrets = json.load(f)
+        client = secrets.get("web") or secrets.get("installed") or {}
+        return client["client_id"].split("-")[0]
+    except (OSError, ValueError, KeyError):
+        logging.exception("Failed to read the OAuth client ID from %s", credentials_path)
+        return None
 
 class OAuthLogin:
     """
@@ -222,8 +246,9 @@ class OAuthLogin:
         # Storage first: the cookie is only a pointer to it.
         creds_db.upsert_credentials(user_id, creds, email=user_email)
 
+        # Only the session and the cookie hold the user_id, never the URL: a
+        # link with ?user_id=... in it would sign in whoever opens it.
         st.session_state["user_id"] = user_id
-        st.query_params["user_id"] = user_id
-        cookie_controller.set("user_id", user_id)
+        cookie_controller.set("user_id", user_id, expires=_cookie_expiry())
 
         return creds

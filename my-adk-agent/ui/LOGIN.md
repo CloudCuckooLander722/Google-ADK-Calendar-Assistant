@@ -12,3 +12,15 @@
 
 - [] Arguments: OAuthLogin
 - [] Brief: Initializes login link + login and download_creds from OAuthLogin
+
+## 1.2 chat_interface.py
+
+### 1.21 `restore_signed_in_user` requirements
+
+- [] retrieves user_id from cookie_controller defined as cookie_service.controller() 
+
+### 1.22 `retrieve_conversation` requirements
+
+- [] params user_id
+- [] retrieves conversation (messages) from cookie_controller and displays it in `run_chat_interface`
+

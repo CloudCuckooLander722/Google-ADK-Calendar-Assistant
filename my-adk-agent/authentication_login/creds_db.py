@@ -7,10 +7,8 @@ import os
 from google.cloud import firestore
 from cryptography.fernet import Fernet, InvalidToken
 import streamlit as st
-from services.cookie_service import controller
+from services.cookie_service import controller as cookie_controller
 from google.oauth2.credentials import Credentials
-
-cookie_controller = controller()
 
 _ENCRYPTION_KEY = os.environ.get("GOOGLE_CREDS_ENCRYPTION_KEY")
 if not _ENCRYPTION_KEY:
@@ -68,20 +66,35 @@ def upsert_credentials(user_id, creds, email=None):
 
     get_db().collection("users").document(user_id).set(row, merge=True)
 
-def _get_creds_dict():
+def _find_user_id():
+    """
+    The signed-in user's id: from st.session_state (set at sign-in, or by
+    restore_signed_in_user after a refresh), then st.query_params, then the
+    user_id cookie. Raises ValueError if none of them has it.
+    """
+    cookie_user_id = cookie_controller.get("user_id")
+    # The cookie component JSON-parses what it reads from the browser, which
+    # turns an all-digit Google id into a rounded number: only a string is the id.
+    if not isinstance(cookie_user_id, str):
+        cookie_user_id = None
+    user_id = (
+        st.session_state.get("user_id")
+        or st.query_params.get("user_id")
+        or cookie_user_id
+    )
+    if not user_id:
+        raise ValueError("No user_id detected.")
+    return str(user_id)
+
+
+def _get_creds_dict(user_id=None):
     """
     Retrieves the dictionary of credentials from the Firestore database.
-    Args: None
+    Args: user_id, found with _find_user_id() if not given
     returns: dict, or None if the user has no stored credentials
     """
     db = get_db()
-
-    if st.query_params.get("user_id"):
-        user_id = st.query_params.get("user_id")
-    elif cookie_controller.get("user_id"):
-        user_id = cookie_controller.get("user_id")
-    else:
-        raise ValueError("No user_id detected.")
+    user_id = user_id or _find_user_id()
 
     doc = db.collection("users").document(user_id).get()
 
@@ -129,14 +142,23 @@ def _create_creds_object(creds_dict):
     return creds
 
 
-def get_valid_credentials():
+def delete_credentials(user_id):
+    """
+    Deletes users/{user_id}, e.g. when the user disconnects WorkFlow.
+    Args: user_id
+    Returns: None
+    """
+    get_db().collection("users").document(user_id).delete()
+
+
+def get_valid_credentials(user_id=None):
     """
     Arranges for the retrieval of credentials for purposes.
-    Args: none
+    Args: user_id, found with _find_user_id() if not given
     returns: creds in Credentials object, or None if the user has none stored.
     """
 
-    creds_dict = _get_creds_dict()
+    creds_dict = _get_creds_dict(user_id)
     if creds_dict is None:
         return None
     creds = _create_creds_object(creds_dict=creds_dict)

@@ -11,10 +11,13 @@ from streamlit_calendar import calendar as st_calendar
 from streamlit_google_picker import google_picker
 
 from pathlib import Path
+import base64
+import json
 import os
 import sys
 import datetime
 import logging
+import zlib
 
 MODULE_DIR = Path(__file__).resolve().parent
 APP_ROOT = MODULE_DIR.parent
@@ -25,11 +28,9 @@ for base in (str(PROJECT_ROOT), str(APP_ROOT)):
         sys.path.insert(0, base)
 
 from ui.fetch_timezone import fetch_timezone
-from google_oauth.oauth_login import (
-    OAuthLogin, get_calendar_service, get_tasks_service, get_drive_access_token,
-    get_picker_app_id, restore_signed_in_user,
-)
-from cookie_service import controller 
+from services.cookie_service import controller
+from services.api_services import get_calendar_service, get_tasks_service, get_drive_access_token
+from authentication_login.oauth_login import OAuthLogin, get_picker_app_id, USER_ID_COOKIE_DAYS
 
 
 # One height for both panels so the chat box and the calendar always match.
@@ -42,9 +43,15 @@ CHAT_LOG_HEIGHT = PANEL_HEIGHT - 108
 # How long the calendar panel reuses what it fetched from Google. The agent's
 # own changes bypass this (see _calendar_blocks).
 CALENDAR_CACHE_SECONDS = 120
-# Before the signed-in user is known (the first run after a refresh, while the
-# cookie loads), the chat is keyed to this browser session instead.
-GUEST_KEY = "guest_chat_key"
+# The cookie a copy of the user's recent messages is kept in, so the chat comes
+# back after a refresh even when the server restarted in between (Cloud Run
+# starts new instances, and redeploys clear the in-memory conversations).
+CONVERSATION_COOKIE = "conversation"
+# A browser keeps at most ~4 KB per cookie: the oldest messages are left out
+# until the (compressed) rest fits.
+CONVERSATION_COOKIE_CHARS = 3800
+# Longer messages are cut in the cookie copy, so one long reply can't push out the rest.
+CONVERSATION_COOKIE_MESSAGE_CHARS = 1500
 
 # Bumped after each send so the attachment widgets get new keys and start empty.
 ATTACH_NONCE_KEY = "attach_nonce"
@@ -110,7 +117,8 @@ def _google_drive_files(key: str) -> list:
         # Signed in before WorkFlow asked for Drive, or unticked it at Google's
         # consent screen: signing in again asks for it.
         st.caption("WorkFlow needs your permission to open files you pick from Google Drive.")
-        st.link_button("Connect Google Drive", OAuthLogin().init_google_auth())
+        authorization_url, _ = OAuthLogin().init_flow()
+        st.link_button("Connect Google Drive", authorization_url)
         return []
 
     return list(google_picker(
@@ -271,6 +279,106 @@ def _attachment_menu(nonce: int) -> dict:
     }
 
 
+def _cookie_value(cookie_controller, name: str) -> str | None:
+    """
+    A cookie's value as the browser stored it. The cookie component JSON-parses
+    values (turning an all-digit Google id into a rounded number) and is empty
+    on the first run after a refresh, until the browser answers; the request's
+    own cookie header (st.context.cookies) has the exact value from the start.
+    """
+    for value in (cookie_controller.get(name), st.context.cookies.get(name)):
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def restore_signed_in_user() -> str | None:
+    """
+    The signed-in user's id, or None. After a browser refresh session_state is
+    empty: the id comes back from the user_id cookie set at sign-in, so the
+    calendar and the agent's tools can find their Google credentials again.
+    """
+    user_id = st.session_state.get("user_id")
+    if not user_id:
+        cookie_controller = controller()
+        user_id = _cookie_value(cookie_controller, "user_id")
+        if user_id:
+            st.session_state["user_id"] = user_id
+    return user_id
+
+
+def _encode_conversation(user_id: str, messages: list[dict]) -> str:
+    """The newest messages that fit in one cookie, compressed into a cookie-safe string."""
+    kept = [
+        {"role": m["role"], "content": m["content"][:CONVERSATION_COOKIE_MESSAGE_CHARS]}
+        for m in messages
+    ]
+    while True:
+        raw = json.dumps({"user_id": user_id, "messages": kept}, separators=(",", ":"))
+        value = base64.urlsafe_b64encode(zlib.compress(raw.encode(), 9)).decode().rstrip("=")
+        if len(value) <= CONVERSATION_COOKIE_CHARS or not kept:
+            return value
+        kept = kept[1:]
+
+
+def _decode_conversation(user_id: str, value: str | None) -> list[dict]:
+    """The messages saved by _encode_conversation, or [] if there are none for this user."""
+    if not value:
+        return []
+    try:
+        raw = zlib.decompress(base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)))
+        saved = json.loads(raw)
+    except (ValueError, zlib.error):
+        logging.warning("Ignoring an unreadable conversation cookie")
+        return []
+    # The cookie belongs to the browser: never show one account's chat to another.
+    if not isinstance(saved, dict) or saved.get("user_id") != user_id:
+        return []
+    return [
+        m for m in saved.get("messages", [])
+        if isinstance(m, dict) and m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str)
+    ]
+
+
+def retrieve_conversation(user_id: str) -> list[dict]:
+    """
+    The user's chat messages, to display in run_chat_interface. The server
+    keeps the whole conversation while it runs; when it has none for this user
+    (it restarted, or the user landed on another instance), the copy saved in
+    the conversation cookie is brought back into it.
+    """
+    conversation = find_conversation(user_id)
+    if conversation and conversation.messages:
+        return conversation.messages
+
+    cookie_controller = controller()
+    messages = _decode_conversation(user_id, _cookie_value(cookie_controller, CONVERSATION_COOKIE))
+    if messages:
+        # The agent's own context didn't survive the restart, only what was shown.
+        conversation = get_conversation(initialize_adk(), user_id)
+        if not conversation.messages:
+            conversation.messages.extend(messages)
+        return conversation.messages
+    return []
+
+
+def _save_conversation(user_id: str, messages: list[dict]) -> None:
+    """
+    Saves the newest messages in the conversation cookie when they changed.
+    Called on runs that end normally: the cookie is written by a component, and
+    an st.rerun() right after it can drop it before the browser runs it.
+    """
+    if not messages:
+        return
+    cookie_controller = controller()
+    value = _encode_conversation(user_id, messages)
+    if value != _cookie_value(cookie_controller, CONVERSATION_COOKIE):
+        cookie_controller.set(
+            CONVERSATION_COOKIE, value,
+            expires=datetime.datetime.now() + datetime.timedelta(days=USER_ID_COOKIE_DAYS),
+        )
+
+
 def run_chat_interface():
     """
     Sets up and runs the Streamlit web application for the ADK chat assistant.
@@ -313,13 +421,19 @@ def run_chat_interface():
     # back from their cookie, so the calendar and the agent's tools can find
     # their Google credentials again.
     signed_in_user = restore_signed_in_user()
+    if not signed_in_user:
+        st.warning("You're signed out.")
+        st.link_button("Sign in with Google", "/login_page?logged_in=False")
+        st.stop()
 
     # The runner and every user's conversation are kept by st.cache_resource,
     # so the chat and the agent's context survive a refresh. They're keyed by
     # the Google account, never shared between users.
     adk_runner = initialize_adk()
-    user_key = signed_in_user or st.session_state.setdefault(GUEST_KEY, f"guest_{os.urandom(8).hex()}")
+    user_key = signed_in_user
+    messages = retrieve_conversation(user_key)
     conversation = find_conversation(user_key)
+    _save_conversation(user_key, messages)
     fetch_timezone()
 
     # Left column: actual chat panel with messages and input in 40%
@@ -336,7 +450,7 @@ def run_chat_interface():
             chat_log = st.container(height=CHAT_LOG_HEIGHT, border=False)
             with chat_log:
                 # Display existing chat messages.
-                for message in (conversation.messages if conversation else []):
+                for message in messages:
                     with st.chat_message(message["role"]):
                         st.markdown(message["content"])
 
@@ -384,11 +498,9 @@ def run_chat_interface():
 
     with calendar_col:
         st.markdown("#### Google Calendar")
-        calendar_blocks = []
-        if signed_in_user:
-            calendar_blocks = _calendar_blocks(
-                signed_in_user, conversation.calendar_version if conversation else 0, *_calendar_window(),
-            )
+        calendar_blocks = _calendar_blocks(
+            signed_in_user, conversation.calendar_version if conversation else 0, *_calendar_window(),
+        )
         st_calendar(
             events=calendar_blocks,
             options={
@@ -403,9 +515,7 @@ def run_chat_interface():
             custom_css=CALENDAR_CSS,
             key="google_calendar_view",
         )
-        if not signed_in_user:
-            st.caption("Loading your calendar... if it stays empty, sign in again.")
-        elif not calendar_blocks:
+        if not calendar_blocks:
             st.caption("No events or tasks found around this month.")
         else:
             st.caption("Events use their calendar's color; ☐ tasks are orange.")

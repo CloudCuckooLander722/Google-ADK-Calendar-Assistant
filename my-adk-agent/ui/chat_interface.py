@@ -4,6 +4,7 @@ from services.adk_service import (
     SCREENSHOT_MIME_TYPES, DOCUMENT_MIME_TYPES, DRIVE_MIME_TYPES,
 )
 
+
 from config.settings import get_api_key
 from streamlit_js_eval import streamlit_js_eval
 from streamlit_calendar import calendar as st_calendar
@@ -28,6 +29,7 @@ from google_oauth.oauth_login import (
     OAuthLogin, get_calendar_service, get_tasks_service, get_drive_access_token,
     get_picker_app_id, restore_signed_in_user,
 )
+from cookie_service import controller as cookie_controller
 
 
 # One height for both panels so the chat box and the calendar always match.

@@ -23,10 +23,18 @@ def login():
     Args: None
     Returns: None
     """
+
+    st.set_page_config(
+        page_title="Login Panel", 
+        page_icon="🔒", 
+        layout="centered"
+    )
+
     authenticator = OAuthLogin()
 
     authenticator.login_link()
     authenticator.download_creds()
+    st.query_params["logged_in"] = "True"
 
 
 def login_page():
@@ -37,3 +45,5 @@ def login_page():
         login()
     else:
         run_chat_interface()
+
+    st.rerun()

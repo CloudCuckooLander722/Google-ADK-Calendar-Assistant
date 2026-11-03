@@ -14,7 +14,7 @@ import streamlit as st
 from authentication_login.oauth_login import OAuthLogin
 from services.cookie_service import controller
 from services.api_services import check_creds
-from ui.chat_interface import run_chat_interface, restore_signed_in_user
+from ui.chat_interface import chat_navigation, restore_signed_in_user
 
 # Query parameters Google adds when it sends the user back after sign-in.
 GOOGLE_REDIRECT_PARAMS = ("code", "state", "scope", "iss", "authuser", "prompt", "hd")
@@ -59,7 +59,7 @@ def login(authenticator: OAuthLogin):
             # Shown in this run rather than after st.rerun(): the user_id
             # cookie is written by a component that a rerun could drop
             # before the browser runs it.
-            run_chat_interface()
+            chat_navigation()
             return
 
     st.title("WorkFlow Assistant")
@@ -103,7 +103,7 @@ def login_page(authenticator: OAuthLogin | None = None):
         and _has_credentials(restore_signed_in_user())
     ):
         st.query_params["logged_in"] = "True"
-        run_chat_interface()
+        chat_navigation()
     else:
         if "code" not in st.query_params:
             st.query_params["logged_in"] = "False"

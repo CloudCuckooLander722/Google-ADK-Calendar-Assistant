@@ -28,7 +28,7 @@ from ui.fetch_timezone import fetch_timezone
 from services.cookie_service import controller
 from services.api_services import get_calendar_service, get_tasks_service, get_drive_access_token
 from authentication_login.oauth_login import OAuthLogin, get_picker_app_id
-
+from ui.to_do import load_agenda_page
 
 # One height for both panels so the chat box and the calendar always match.
 PANEL_HEIGHT = 620
@@ -487,3 +487,42 @@ def run_chat_interface():
         else:
             st.caption("Events use their calendar's color; ☐ tasks are orange.")
 
+# The pages a signed-in user can switch between, in the order shown: their
+# label in the navigation bar, and the function that draws them.
+CHAT_VIEWS = {
+    "chat": ("💬 Chat", run_chat_interface),
+    "agenda": ("📅 Agenda", load_agenda_page),
+}
+DEFAULT_VIEW = "chat"
+# The page shown is kept in the URL (?view=agenda), so a refresh stays on it.
+VIEW_PARAM = "view"
+VIEW_KEY = "chat_view"
+
+
+def chat_navigation():
+    """
+    Offers navigation between features in WorkFlow Assistant, including the chat interface and the agenda page.
+
+    A bar at the top switches between them. It doesn't use st.navigation:
+    main.py's navigation already owns the URLs, and a second one would replace
+    its pages, so a refresh couldn't find /login_page (where the sign-in check
+    runs) again.
+    """
+    current = st.query_params.get(VIEW_PARAM)
+    if current not in CHAT_VIEWS:
+        current = DEFAULT_VIEW
+
+    views = list(CHAT_VIEWS)
+    view = st.radio(
+        "Go to",
+        options=views,
+        index=views.index(current),
+        format_func=lambda name: CHAT_VIEWS[name][0],
+        horizontal=True,
+        key=VIEW_KEY,
+        label_visibility="collapsed",
+    )
+    st.query_params[VIEW_PARAM] = view
+
+    _, draw_page = CHAT_VIEWS[view]
+    draw_page()

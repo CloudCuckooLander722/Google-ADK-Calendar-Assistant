@@ -27,3 +27,19 @@
 - [] a new tab or a later visit gets a new tab id and starts with an empty conversation, which replaces the old one (at most one conversation per user in memory)
 - [] the conversation is never saved in a cookie
 
+## 1.3 to_do.py
+
+### 1.31 `fetch_date` requirements
+
+- [] fetches the date to retrieve all the tasks / events
+
+### 1.32 `task_converter` requirements
+- [] makes tasks for everything / checks it
+
+### 1.33 `show_todo_page` requirements
+
+- [] uses `st_calendar` to display events given the output of `fetch_date` and `task_converter`
+
+- [] enables the user to check off tasks from today, also displays all the tasks from this week or the last week
+
+

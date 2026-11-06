@@ -121,9 +121,12 @@ def _return_tasks(tasks_service, today_date):
         logging.exception("Failed to list task lists")
         return []
 
-    # Tasks only have a due date, stored as midnight UTC of that date.
-    due_min = f"{today_date}T00:00:00Z"
-    due_max = f"{today_date}T23:59:59Z"
+    # A task's due is midnight UTC of its date (2026-11-05T00:00:00.000Z).
+    # Google leaves out a task due exactly at dueMin, so ask for the day either
+    # side and keep the tasks whose due date is today.
+    day = datetime.date.fromisoformat(today_date)
+    due_min = f"{day - datetime.timedelta(days=1)}T00:00:00Z"
+    due_max = f"{day + datetime.timedelta(days=1)}T00:00:00Z"
 
     tasks = []
     for task_list in task_lists:
@@ -135,15 +138,19 @@ def _return_tasks(tasks_service, today_date):
             showCompleted=True,
             # Tasks completed in Google's own apps are hidden unless asked for.
             showHidden=True,
+            maxResults=100,
             ).execute()
         except Exception:
             # One unreachable list shouldn't hide the others.
             logging.exception("Failed to load today's tasks from task list %s", task_list.get('id'))
             continue
-        tasks.extend(tasks_result.get('items', []))
+        tasks.extend(
+            task for task in tasks_result.get('items', [])
+            if (task.get('due') or '')[:10] == today_date
+        )
 
     return tasks
-    
+
 
 def _event_start(event):
     """Sort key: all-day events (a bare date) come before timed ones on the same day."""

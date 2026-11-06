@@ -52,6 +52,13 @@ TASK_LISTS = {
     ],
 }
 TASKS = TASK_LISTS["@default"] + TASK_LISTS["school"]
+# Due the day before and after: Google returns them for a wider window, and
+# the agenda must leave them out.
+OTHER_DAYS = [
+    {"id": "task-y", "title": "Yesterday's task", "status": "needsAction", "due": "2026-11-02T00:00:00.000Z"},
+    {"id": "task-t", "title": "Tomorrow's task", "status": "needsAction", "due": "2026-11-04T00:00:00.000Z"},
+]
+TASK_LISTS["@default"] = TASK_LISTS["@default"] + OTHER_DAYS
 
 # Events in several calendars, like Google Calendar's day view: the agenda must
 # show every calendar the user has ticked (selected) plus the primary one.
@@ -124,8 +131,13 @@ class FakeTasksService:
                 service.calls.append(kwargs)
                 if kwargs["tasklist"] in service.failing_lists:
                     return FakeRequest(error=_api_error())
-                items = service.lists.get(kwargs["tasklist"], [])
-                return FakeRequest({"items": list(items)} if items else {}, service.error)
+                # Like Google: dueMin is exclusive (a task due exactly at
+                # dueMin isn't returned), dueMax is inclusive.
+                items = [
+                    task for task in service.lists.get(kwargs["tasklist"], [])
+                    if kwargs["dueMin"] < task["due"].replace(".000Z", "Z") <= kwargs["dueMax"]
+                ]
+                return FakeRequest({"items": items} if items else {}, service.error)
         return _Tasks()
 
 
@@ -337,14 +349,25 @@ def test_return_tasks_returns_todays_tasks_from_every_list(to_do):
     assert to_do._return_tasks(FakeTasksService(), TODAY) == TASKS
 
 
-def test_return_tasks_asks_every_list_for_tasks_due_today(to_do):
+def test_return_tasks_asks_every_list_for_a_window_around_today(to_do):
     service = FakeTasksService()
     to_do._return_tasks(service, TODAY)
     assert [call["tasklist"] for call in service.calls] == ["@default", "school"]
     for call in service.calls:
-        # Tasks only have a due date, stored as midnight UTC of that date.
-        assert call["dueMin"] == f"{TODAY}T00:00:00Z"
-        assert call["dueMax"] == f"{TODAY}T23:59:59Z"
+        # A task's due is midnight UTC of its date. Google's dueMin is
+        # exclusive, so today's midnight must be strictly inside the window.
+        assert call["dueMin"] < f"{TODAY}T00:00:00Z" <= call["dueMax"]
+
+
+def test_return_tasks_includes_a_task_due_exactly_at_midnight(to_do):
+    """Every task is due at midnight UTC; with dueMin exactly at today's midnight, Google returns none."""
+    titles = [t["title"] for t in to_do._return_tasks(FakeTasksService(), TODAY)]
+    assert "Send the budget to Amy" in titles and "Book the dentist" in titles
+
+
+def test_return_tasks_leaves_out_other_days(to_do):
+    titles = [t["title"] for t in to_do._return_tasks(FakeTasksService(), TODAY)]
+    assert "Yesterday's task" not in titles and "Tomorrow's task" not in titles
 
 
 def test_return_tasks_includes_completed_tasks(to_do):
@@ -524,7 +547,7 @@ def test_load_agenda_page_asks_for_the_users_day(to_do, tmp_path, services):
     _run_page(tmp_path, to_do.load_agenda_page)
     assert calendar.calls[0]["timeMin"] == "2026-11-03T00:00:00-08:00"
     assert calendar.calls[0]["timeZone"] == TIMEZONE
-    assert tasks.calls[0]["dueMin"] == f"{TODAY}T00:00:00Z"
+    assert tasks.calls[0]["dueMin"] < f"{TODAY}T00:00:00Z" <= tasks.calls[0]["dueMax"]
 
 
 def test_load_agenda_page_asks_the_browser_for_the_date_once(to_do, tmp_path, services, browser):

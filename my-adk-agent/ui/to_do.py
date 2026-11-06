@@ -100,6 +100,7 @@ def list_times(today_date, timeZone):
     zone = _zone(timeZone)
     day = datetime.date.fromisoformat(today_date)
 
+    # Midnight to the next midnight in the user's timezone: the whole day.
     timeMin = datetime.datetime.combine(day, time.min, tzinfo=zone).isoformat()
     timeMax = datetime.datetime.combine(day + datetime.timedelta(days=1), time.min, tzinfo=zone).isoformat()
 
@@ -107,58 +108,91 @@ def list_times(today_date, timeZone):
 
 def _return_tasks(tasks_service, today_date):
     """
-    Returns tasks due today, completed ones too.
+    Returns tasks due today from every task list, completed ones too.
     Params: tasks_service (None when signed out), today_date (YYYY-MM-DD)
     Returns: list of tasks
     """
     if tasks_service is None:
         return []
 
+    try:
+        task_lists = tasks_service.tasklists().list(maxResults=100).execute().get('items', [])
+    except Exception:
+        logging.exception("Failed to list task lists")
+        return []
+
     # Tasks only have a due date, stored as midnight UTC of that date.
     due_min = f"{today_date}T00:00:00Z"
     due_max = f"{today_date}T23:59:59Z"
 
-    try:
-        tasks_result = tasks_service.tasks().list(
-        tasklist="@default",
-        dueMin=due_min,
-        dueMax=due_max,
-        showCompleted=True,
-        # Tasks completed in Google's own apps are hidden unless asked for.
-        showHidden=True,
-        ).execute()
-    except Exception:
-        logging.exception("Failed to load today's tasks")
-        return []
+    tasks = []
+    for task_list in task_lists:
+        try:
+            tasks_result = tasks_service.tasks().list(
+            tasklist=task_list['id'],
+            dueMin=due_min,
+            dueMax=due_max,
+            showCompleted=True,
+            # Tasks completed in Google's own apps are hidden unless asked for.
+            showHidden=True,
+            ).execute()
+        except Exception:
+            # One unreachable list shouldn't hide the others.
+            logging.exception("Failed to load today's tasks from task list %s", task_list.get('id'))
+            continue
+        tasks.extend(tasks_result.get('items', []))
 
-    tasks = tasks_result.get('items', [])
-    
     return tasks
     
 
+def _event_start(event):
+    """Sort key: all-day events (a bare date) come before timed ones on the same day."""
+    start = event.get('start', {})
+    return start.get('dateTime') or start.get('date') or ""
+
+
 def _return_events(timeZone, timeMin, timeMax, calendar_service):
     """
-    Returns events.
+    Returns events from every calendar shown in the user's Google Calendar
+    (the ticked ones, plus the primary calendar), all-day first, then by start time.
     Params: timeZone, timeMin, timeMax, calendar_service (None when signed out)
-    Returns: events_result
+    Returns: events_result ({"items": [...]})
     """
     if calendar_service is None:
         return {"items": []}
 
     try:
-        events_result = calendar_service.events().list(
-        calendarId='primary',
-        timeMin=timeMin,                  
-        timeMax=timeMax,                   
-        timeZone=timeZone,         
-        singleEvents=True,
-        orderBy='startTime'
-        ).execute()
+        calendars = calendar_service.calendarList().list().execute().get('items', [])
+        calendar_ids = [cal['id'] for cal in calendars if cal.get('selected') or cal.get('primary')]
     except Exception:
-        logging.exception("Failed to load today's events")
-        return {"items": []}
+        logging.exception("Failed to list calendars")
+        calendar_ids = ['primary']
 
-    return events_result
+    events = []
+    seen_ids = set()
+    for calendar_id in calendar_ids:
+        try:
+            events_result = calendar_service.events().list(
+            calendarId=calendar_id,
+            timeMin=timeMin,                  
+            timeMax=timeMax,                   
+            timeZone=timeZone,         
+            singleEvents=True,
+            orderBy='startTime'
+            ).execute()
+        except Exception:
+            # One unreachable calendar shouldn't hide the others.
+            logging.exception("Failed to load today's events from calendar %s", calendar_id)
+            continue
+        for event in events_result.get('items', []):
+            # An event the user was invited to can be in two of their calendars
+            # with the same id: show it once (its id is the checkbox's key).
+            if event.get('id') not in seen_ids:
+                seen_ids.add(event.get('id'))
+                events.append(event)
+
+    # Every calendar is in timeZone, so the start times compare as text.
+    return {"items": sorted(events, key=_event_start)}
 
 
 

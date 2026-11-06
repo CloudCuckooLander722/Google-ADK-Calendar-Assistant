@@ -42,18 +42,49 @@ MODULE_UNDER_TEST = os.environ.get("TO_DO_MODULE", "ui.to_do")
 TODAY = "2026-11-03"
 TIMEZONE = "America/Los_Angeles"
 
-TASKS = [
-    {"id": "task-1", "title": "Send the budget to Amy", "status": "needsAction", "due": f"{TODAY}T00:00:00.000Z"},
-    {"id": "task-2", "title": "Book the dentist", "status": "completed", "due": f"{TODAY}T00:00:00.000Z"},
+# Tasks in two task lists: the agenda must read every list, not only @default.
+TASK_LISTS = {
+    "@default": [
+        {"id": "task-1", "title": "Send the budget to Amy", "status": "needsAction", "due": f"{TODAY}T00:00:00.000Z"},
+    ],
+    "school": [
+        {"id": "task-2", "title": "Book the dentist", "status": "completed", "due": f"{TODAY}T00:00:00.000Z"},
+    ],
+}
+TASKS = TASK_LISTS["@default"] + TASK_LISTS["school"]
+
+# Events in several calendars, like Google Calendar's day view: the agenda must
+# show every calendar the user has ticked (selected) plus the primary one.
+CALENDARS = [
+    {"id": "me@example.com", "primary": True},
+    {"id": "work", "selected": True},
+    {"id": "holidays", "selected": False},
 ]
-EVENTS = {
-    "items": [
+CALENDAR_EVENTS = {
+    "me@example.com": [
         {"id": "event-1", "summary": "Team standup",
          "start": {"dateTime": f"{TODAY}T09:00:00-08:00"}, "end": {"dateTime": f"{TODAY}T09:15:00-08:00"}},
         {"id": "event-2", "summary": "Lunch with Sam",
          "start": {"dateTime": f"{TODAY}T12:30:00-08:00"}, "end": {"dateTime": f"{TODAY}T13:30:00-08:00"}},
-    ]
+    ],
+    "work": [
+        {"id": "event-3", "summary": "Office hours",
+         "start": {"dateTime": f"{TODAY}T08:30:00-08:00"}, "end": {"dateTime": f"{TODAY}T12:00:00-08:00"}},
+        {"id": "event-4", "summary": "Exam week",
+         "start": {"date": TODAY}, "end": {"date": "2026-11-04"}},
+    ],
+    "holidays": [
+        {"id": "event-5", "summary": "Hidden in Google Calendar",
+         "start": {"date": TODAY}, "end": {"date": "2026-11-04"}},
+    ],
 }
+# All of the shown calendars' events, all-day first, then by start time.
+EVENTS = {"items": [
+    CALENDAR_EVENTS["work"][1],
+    CALENDAR_EVENTS["work"][0],
+    CALENDAR_EVENTS["me@example.com"][0],
+    CALENDAR_EVENTS["me@example.com"][1],
+]}
 
 
 # --- Fakes for the outside world ----------------------------------------------
@@ -69,12 +100,21 @@ class FakeRequest:
 
 
 class FakeTasksService:
-    """googleapiclient's Tasks service: tasks().list(**kwargs).execute()."""
+    """googleapiclient's Tasks service: tasklists().list() and tasks().list(tasklist=...)."""
 
-    def __init__(self, result=None, error=None):
-        self.result = {"items": list(TASKS)} if result is None else result
+    def __init__(self, lists=None, error=None, failing_lists=()):
+        self.lists = TASK_LISTS if lists is None else lists
         self.error = error
+        self.failing_lists = set(failing_lists)
         self.calls = []
+
+    def tasklists(self):
+        service = self
+
+        class _TaskLists:
+            def list(self, **kwargs):
+                return FakeRequest({"items": [{"id": list_id} for list_id in service.lists]}, service.error)
+        return _TaskLists()
 
     def tasks(self):
         service = self
@@ -82,17 +122,29 @@ class FakeTasksService:
         class _Tasks:
             def list(self, **kwargs):
                 service.calls.append(kwargs)
-                return FakeRequest(service.result, service.error)
+                if kwargs["tasklist"] in service.failing_lists:
+                    return FakeRequest(error=_api_error())
+                items = service.lists.get(kwargs["tasklist"], [])
+                return FakeRequest({"items": list(items)} if items else {}, service.error)
         return _Tasks()
 
 
 class FakeCalendarService:
-    """googleapiclient's Calendar service: events().list(**kwargs).execute()."""
+    """googleapiclient's Calendar service: calendarList().list() and events().list(calendarId=...)."""
 
-    def __init__(self, result=None, error=None):
-        self.result = dict(EVENTS) if result is None else result
+    def __init__(self, error=None, failing_calendars=(), calendar_list_error=None):
         self.error = error
+        self.failing_calendars = set(failing_calendars)
+        self.calendar_list_error = calendar_list_error
         self.calls = []
+
+    def calendarList(self):
+        service = self
+
+        class _CalendarList:
+            def list(self, **kwargs):
+                return FakeRequest({"items": list(CALENDARS)}, service.calendar_list_error)
+        return _CalendarList()
 
     def events(self):
         service = self
@@ -100,7 +152,12 @@ class FakeCalendarService:
         class _Events:
             def list(self, **kwargs):
                 service.calls.append(kwargs)
-                return FakeRequest(service.result, service.error)
+                calendar_id = kwargs["calendarId"]
+                if calendar_id in service.failing_calendars:
+                    return FakeRequest(error=_api_error())
+                if calendar_id == "primary":
+                    calendar_id = "me@example.com"
+                return FakeRequest({"items": list(CALENDAR_EVENTS.get(calendar_id, []))}, service.error)
         return _Events()
 
 
@@ -276,30 +333,35 @@ def test_list_times_without_a_timezone_uses_utc(to_do):
 
 # --- _return_tasks ------------------------------------------------------------------
 
-def test_return_tasks_returns_todays_tasks(to_do):
+def test_return_tasks_returns_todays_tasks_from_every_list(to_do):
     assert to_do._return_tasks(FakeTasksService(), TODAY) == TASKS
 
 
-def test_return_tasks_asks_for_tasks_due_today(to_do):
+def test_return_tasks_asks_every_list_for_tasks_due_today(to_do):
     service = FakeTasksService()
     to_do._return_tasks(service, TODAY)
-    (call,) = service.calls
-    assert call["tasklist"] == "@default"
-    # Tasks only have a due date, stored as midnight UTC of that date.
-    assert call["dueMin"] == f"{TODAY}T00:00:00Z"
-    assert call["dueMax"] == f"{TODAY}T23:59:59Z"
+    assert [call["tasklist"] for call in service.calls] == ["@default", "school"]
+    for call in service.calls:
+        # Tasks only have a due date, stored as midnight UTC of that date.
+        assert call["dueMin"] == f"{TODAY}T00:00:00Z"
+        assert call["dueMax"] == f"{TODAY}T23:59:59Z"
 
 
 def test_return_tasks_includes_completed_tasks(to_do):
     """Tasks completed in Google's own apps are hidden unless showHidden is set too."""
     service = FakeTasksService()
     to_do._return_tasks(service, TODAY)
-    assert service.calls[0].get("showCompleted") is True
-    assert service.calls[0].get("showHidden") is True
+    for call in service.calls:
+        assert call.get("showCompleted") is True
+        assert call.get("showHidden") is True
 
 
 def test_return_tasks_with_no_tasks_due(to_do):
-    assert to_do._return_tasks(FakeTasksService(result={}), TODAY) == []
+    assert to_do._return_tasks(FakeTasksService(lists={"@default": []}), TODAY) == []
+
+
+def test_return_tasks_one_failing_list_doesnt_hide_the_others(to_do):
+    assert to_do._return_tasks(FakeTasksService(failing_lists={"@default"}), TODAY) == TASK_LISTS["school"]
 
 
 def test_return_tasks_when_signed_out(to_do):
@@ -312,21 +374,56 @@ def test_return_tasks_when_google_refuses(to_do):
 
 # --- _return_events ----------------------------------------------------------------
 
-def test_return_events_returns_the_events_result(to_do):
-    time_min, time_max = "2026-11-03T00:00:00-08:00", "2026-11-04T00:00:00-08:00"
-    assert to_do._return_events(TIMEZONE, time_min, time_max, FakeCalendarService()) == EVENTS
+TIME_MIN, TIME_MAX = "2026-11-03T00:00:00-08:00", "2026-11-04T00:00:00-08:00"
 
 
-def test_return_events_asks_for_todays_events_in_order(to_do):
+def test_return_events_from_every_shown_calendar(to_do):
+    """Google Calendar's day view shows every ticked calendar, not only the primary one."""
+    result = to_do._return_events(TIMEZONE, TIME_MIN, TIME_MAX, FakeCalendarService())
+    assert result == EVENTS
+
+
+def test_return_events_all_day_first_then_by_start_time(to_do):
+    result = to_do._return_events(TIMEZONE, TIME_MIN, TIME_MAX, FakeCalendarService())
+    assert [e["summary"] for e in result["items"]] == ["Exam week", "Office hours", "Team standup", "Lunch with Sam"]
+
+
+def test_return_events_skips_calendars_hidden_in_google_calendar(to_do):
     service = FakeCalendarService()
-    time_min, time_max = "2026-11-03T00:00:00-08:00", "2026-11-04T00:00:00-08:00"
-    to_do._return_events(TIMEZONE, time_min, time_max, service)
-    (call,) = service.calls
-    assert call["calendarId"] == "primary"
-    assert call["timeMin"] == time_min and call["timeMax"] == time_max
-    assert call["timeZone"] == TIMEZONE
-    # Recurring events expanded into today's occurrence, earliest first.
-    assert call["singleEvents"] is True and call["orderBy"] == "startTime"
+    to_do._return_events(TIMEZONE, TIME_MIN, TIME_MAX, service)
+    assert "holidays" not in [call["calendarId"] for call in service.calls]
+
+
+def test_return_events_asks_each_calendar_for_the_users_day(to_do):
+    service = FakeCalendarService()
+    to_do._return_events(TIMEZONE, TIME_MIN, TIME_MAX, service)
+    assert [call["calendarId"] for call in service.calls] == ["me@example.com", "work"]
+    for call in service.calls:
+        assert call["timeMin"] == TIME_MIN and call["timeMax"] == TIME_MAX
+        assert call["timeZone"] == TIMEZONE
+        # Recurring events expanded into today's occurrence, earliest first.
+        assert call["singleEvents"] is True and call["orderBy"] == "startTime"
+
+
+def test_return_events_one_failing_calendar_doesnt_hide_the_others(to_do):
+    result = to_do._return_events(TIMEZONE, TIME_MIN, TIME_MAX, FakeCalendarService(failing_calendars={"work"}))
+    assert [e["summary"] for e in result["items"]] == ["Team standup", "Lunch with Sam"]
+
+
+def test_return_events_without_the_calendar_list_falls_back_to_primary(to_do):
+    service = FakeCalendarService(calendar_list_error=_api_error())
+    result = to_do._return_events(TIMEZONE, TIME_MIN, TIME_MAX, service)
+    assert [call["calendarId"] for call in service.calls] == ["primary"]
+    assert [e["summary"] for e in result["items"]] == ["Team standup", "Lunch with Sam"]
+
+
+def test_return_events_shows_an_event_in_two_calendars_once(to_do, monkeypatch):
+    """An invite can be in two calendars with the same id; two checkboxes with one key crash Streamlit."""
+    shared = CALENDAR_EVENTS["me@example.com"][0]
+    monkeypatch.setitem(CALENDAR_EVENTS, "work", CALENDAR_EVENTS["work"] + [dict(shared)])
+    result = to_do._return_events(TIMEZONE, TIME_MIN, TIME_MAX, FakeCalendarService())
+    ids = [e["id"] for e in result["items"]]
+    assert ids.count(shared["id"]) == 1
 
 
 def test_return_events_when_signed_out(to_do):
@@ -334,7 +431,8 @@ def test_return_events_when_signed_out(to_do):
 
 
 def test_return_events_when_google_refuses(to_do):
-    assert to_do._return_events(TIMEZONE, "a", "b", FakeCalendarService(error=_api_error())) == {"items": []}
+    service = FakeCalendarService(error=_api_error(), calendar_list_error=_api_error())
+    assert to_do._return_events(TIMEZONE, "a", "b", service) == {"items": []}
 
 
 # --- display_checks (the page) ------------------------------------------------------
@@ -417,7 +515,8 @@ def test_load_agenda_page_shows_the_users_tasks_and_events(to_do, tmp_path, serv
     at, _, error = _run_page(tmp_path, to_do.load_agenda_page)
     assert error is None, f"load_agenda_page() raised {_describe(error)}"
     assert not at.exception, f"the page raised {[e.value for e in at.exception]}"
-    assert set(_checkboxes(at)) == {"task_task-1", "task_task-2", "event_event-1", "event_event-2"}
+    assert set(_checkboxes(at)) == {"task_task-1", "task_task-2",
+                                    "event_event-1", "event_event-2", "event_event-3", "event_event-4"}
 
 
 def test_load_agenda_page_asks_for_the_users_day(to_do, tmp_path, services):

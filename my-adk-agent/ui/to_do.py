@@ -214,6 +214,12 @@ def load_agenda_page():
         st.warning("Sign in with Google to see today's agenda.")
         return
 
+    if controller().get("user_id") is None:
+        st.warning("Sign in with Google to see today's agenda.")
+        return
+
+    
+
     timeZone = fetch_timezone()
     today_date = fetch_date()
 
@@ -223,17 +229,25 @@ def load_agenda_page():
 
     tasks = _return_tasks(task_service, today_date)
 
-    display_checks(tasks, events_result, today_date)
+    controller.set("events", events_result)
+    controller.set("tasks", tasks)
 
-    #reminder tommorow to add in custom HTML and also option to create tasks / verify tasks
+    display_checks(today_date=today_date)
 
     
-def display_checks(tasks, events_result, today_date=None):
+
+    
+def display_checks(today_date=None):
     """
     Displays checkboxes for tasks and events. A completed task starts checked.
     Params: tasks, events_result, today_date (fetch_date() if not given)
     Returns: None
     """
+
+    
+    tasks = controller.get("tasks") or []
+    events_result = controller.get("events") or {}
+
 
     todayDate = today_date or fetch_date()
     st.markdown(AGENDA_CSS, unsafe_allow_html=True)
@@ -244,9 +258,10 @@ def display_checks(tasks, events_result, today_date=None):
 
     st.markdown('<h3 class="agenda-subtitle">Tasks</h3>', unsafe_allow_html=True)
     for task in tasks:
+        is_checked = (task.get('status') == 'completed')
         st.checkbox(
             task.get('title') or "Untitled task",
-            value=task.get('status') == "completed",
+            value=is_checked,
             key=f"task_{task['id']}",
         )
     if not tasks:
@@ -254,6 +269,7 @@ def display_checks(tasks, events_result, today_date=None):
 
     events = events_result.get('items', [])
     st.markdown('<h3 class="agenda-subtitle">Events</h3>', unsafe_allow_html=True)
+
     for event in events:
         st.checkbox(event.get('summary') or "Untitled event", key=f"event_{event['id']}")
     if not events:

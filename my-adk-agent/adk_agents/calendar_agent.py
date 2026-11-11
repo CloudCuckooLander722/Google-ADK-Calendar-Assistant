@@ -146,7 +146,7 @@ General Instructions:
 
 calendar_agent = LlmAgent(
     name="calendar_agent",
-    generate_content_config=types.GenerateContentConfig(temperature=0.2),
+    generate_content_config=types.GenerateContentConfig(temperature=0.0),
     on_tool_error_callback=report_tool_error,
     description="An agent that can manage your Google Calendar events and tasks including updating, deleting, and searching for events.",
     instruction=ROOT_INSTRUCTIONS,
@@ -169,4 +169,3 @@ calendar_agent = LlmAgent(
     
 )
 
-calendar_tool = AgentTool(calendar_agent)

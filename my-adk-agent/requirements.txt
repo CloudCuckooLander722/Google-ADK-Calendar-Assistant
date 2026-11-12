@@ -20,3 +20,4 @@ streamlit-mic-recorder==0.0.8
 SpeechRecognition==3.17.0
 streamlit-cookies-controller==0.0.4
 typesafe-sdk==0.7.5
+google-genai >= 2.34.0

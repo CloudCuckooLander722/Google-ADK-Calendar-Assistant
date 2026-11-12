@@ -20,8 +20,9 @@
 
 -"I want to schedule a plan to study Chapter 10 test for Acc Geo / Alg 2 Trig" 
 - compare against the exam due date: ask
-- collects info, then routes it to `consultant_agent` for steps, may ask `workspace_agent` to create documents and save it to shared Drive folder
+- collects info, then routes it to `consultant_agent` for steps, may prompt the user if its okay to ask `workspace_agent` to create documents and save it to shared Drive folder
 - then asks to schedule
 - then uses `calendar_agent`.
 
-## 1.2 
+## 1.2 `calendar_agent`.py
+

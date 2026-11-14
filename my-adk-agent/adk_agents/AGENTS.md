@@ -26,3 +26,14 @@
 
 ## 1.2 `calendar_agent`.py
 
+### 1.21 Requirements 
+
+- The `calendar_agent` must sort incoming requests from the context window (e.g. requests to schedule a barbecue for Walter White) to categories like "SCHEDULE_EVENT", "DELETE_EVENT", "SCHEDULE_TASK", "DELETE_TASK", "LIST_TASKS", "LIST_EVENTS".
+
+- Associated functions with these categories must execute tasks (e.g scheduling an appointment on Google Calendar) based on the commands listed.
+
+### 1.22 Test Cases
+
+- "Request to schedule an appointment with Dr. Chong from 3:20 PM - 4:00 PM" schedules an appointment with Dr. Chong at that specific time, along with additional information
+
+

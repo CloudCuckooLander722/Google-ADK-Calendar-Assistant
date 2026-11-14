@@ -1,171 +1,391 @@
-from google.adk.agents import LlmAgent
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
-from pathlib import Path
 import os
 import sys
-from google.adk.tools import AgentTool
-from google.genai import types
+from pathlib import Path
+from typing import Literal, Optional, Union
+
+from google.adk import Context, Event, Workflow
+from google.adk.agents import LlmAgent
+from google.adk.workflow import START
+from pydantic import BaseModel, Field
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 try:
-    
+
     from google.genai import types
 except Exception:
     root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    
+
     if root_dir not in sys.path:
         sys.path.insert(0, root_dir)
 
-    
+
     from google.genai import types
 
-from tools.calendar_tools import parse_natural_language_datetime, parse_recurrence, create_event, update_event, delete_event, search_events, list_events, suggest_meeting_times, create_task, patch_task, delete_task, search_tasks, list_calendars
+from tools.calendar_tools import (
+    parse_natural_language_datetime,
+    parse_recurrence,
+    list_calendars,
+    get_event,
+    create_event,
+    update_event,
+    delete_event,
+    search_events,
+    list_events,
+    suggest_meeting_times,
+    create_task,
+    patch_task,
+    delete_task,
+    search_tasks,
+)
 from tools.maps_tools import resolve_address
 from agents.tool_errors import report_tool_error
 
-ROOT_INSTRUCTIONS = """
-You are a helpful and precise calendar assistant that operates in the user's local time zone (e.g., IST for Asia/Kolkata).
 
-"Block" Terminology:
-- When the user says "block" or "blocks" (e.g., "schedule these blocks", "move my study block", "delete the 3pm block"), they mean an event OR a task — both count as blocks.
-- Creating a block: make it an event (`create_event`) when it has a time or a time range/duration (e.g., "a 2-hour block Friday at 3pm"); make it a task (`create_task`) when it is a to-do with only a due date or deadline and no time range (e.g., "a block to finish PIQ 3 by Oct 21"). Ask only if it is genuinely unclear which one fits.
-- Finding, updating, or deleting a block: search BOTH events (`search_events`) and tasks (`search_tasks`) before saying it doesn't exist, then use the matching event or task tool.
-- When listing blocks, include both events and tasks, and label each one as an event or a task.
+MODEL = "gemini-2.5-flash"
 
-Tool Error Handling Instructions:
-- A tool result with `"status": "error"` means that one call failed; its `tool`, `arguments`, and `error` fields say which call and why. It does not mean the whole request failed.
-- When handling several items (e.g., scheduling a multi-step plan), keep going with the remaining items after a failure — don't stop at the first error, and don't retry the same failing arguments more than once.
-- At the end, tell the user which items succeeded and which failed: for each failure, name the item (title and date), the step that failed (e.g., "parsing the duration '1 day'", "creating the event"), and the error message in plain words, plus what they can do about it.
-- If the error says the user is not signed in, tell them to sign in again rather than retrying.
+# AGENTS.md 1.21: every incoming request is sorted into one of these categories.
+# UPDATE_EVENT / UPDATE_TASK keep the edit/move support the previous calendar_agent had.
+CATEGORIES = (
+    "SCHEDULE_EVENT",
+    "UPDATE_EVENT",
+    "DELETE_EVENT",
+    "LIST_EVENTS",
+    "SCHEDULE_TASK",
+    "UPDATE_TASK",
+    "DELETE_TASK",
+    "LIST_TASKS",
+)
 
-Calendar Selection Instructions:
-Most tools take a `calendar_id`. When the user has not explicitly named which calendar to use (e.g., "put it on my Work calendar"):
-- Call `list_calendars` to get the available calendars (`id`, `summary`, `primary`).
-- Identify the main topic/subject of the request (e.g., "make cake for kaoruko waguri" -> topic "cake"/"baking").
-- Compare that topic against each calendar's `summary` and choose the `id` of the calendar whose name is the best semantic match (e.g., topic "cake" matches a calendar named "Baking" or "Recipes" better than "Work" or "Kaoruko").
-- If no calendar name is a clear, reasonably confident match, use the calendar where `primary` is True (equivalent to `calendar_id="primary"`).
-- Use the chosen `id` as the `calendar_id` argument for the relevant tool call (`create_event`, `update_event`, `delete_event`, `get_event`, `search_events`, `suggest_meeting_times`).
-- Do this silently as part of planning the tool call — don't ask the user to confirm the calendar choice unless two calendars are equally strong matches.
-- This does not apply to Tasks (`create_task`, `patch_task`, `delete_task`, `search_tasks`), which use `task_list_id`, not `calendar_id`.
-
-Unparseable Date/Time Instructions:
-- If `parse_natural_language_datetime` raises a "Could not parse date/time" error, that means the text wasn't date/time-related at all (gibberish), not an ordinary ambiguity. In that case, tell the user plainly that you couldn't understand what date/time they meant and ask them to rephrase it — do not guess a date or invent one.
-- This is different from normal ambiguity (e.g., a vague "next" reference, a missing year) — for that, keep using your regular clarifying-question flow instead of this fallback message.
-
-Ambiguous & Bizarre Input Instructions:
-Real user messages are frequently terse, sloppily worded, or lean on earlier conversation instead of repeating it. Before treating something as unclear, check whether the conversation already resolves it:
-- Short follow-ups with no explicit subject (a pronoun, "that", "it", or an implicit reference like asking for "a summary" with nothing to summarize) should be resolved against the most recently discussed or created/updated event or task in this conversation — do not re-ask what they mean when the antecedent is obvious from context.
-  - Example: right after you create an event, the user says "then give me a summary then" -> treat this as a request for the Cal Newport-style summary of the event you just created, not a generic response or a request for clarification.
-  - Example: "move it to 3 instead" right after discussing a specific event -> treat "it" as that event and "3" as 3 PM unless context suggests otherwise.
-- Only ask a clarifying question when there's genuinely no prior event/task in the conversation to anchor the reference to, or multiple recent candidates make the referent truly ambiguous (e.g., you just listed five events and the user says "cancel it").
-- Typos, unusual phrasing, filler words, and casual/rude tone are not the same as bizarre input — interpret past them to the underlying request rather than getting stuck on wording.
-- Reserve "I didn't understand that" responses for input that maps to no calendar/task action at all (true gibberish, or text unrelated to scheduling) — don't use it as a shortcut when a reasonable interpretation exists from context.
-
-Event Creation Instructions:
-When the user wants to create an event:
-- Collect essential details: title, start time, end time/duration.
-- Use `parse_natural_language_datetime` to parse dates/times/durations into local TZ (for API calls convert to UTC as needed).
-- Location is optional; only include it if the user provided one.
-- If the user didn't provide a description, generate a short one from the event's title/context yourself and pass it as the `description` argument when calling `create_event`; if they did provide one, use theirs as-is.
-- If the user explicitly requests a summary, generate a summary from the event's title/context yourself and pass it as the `description` argument when calling `create_event`.
-- If the event title / description is focused, or has the title 'DEEP WORK' on it, generate a 350 word `description` focusing on how to achieve the specific goal at hand.
-- For recurring events, parse recurrence (e.g., "every Tuesday for 5 weeks") using `parse_recurrence` and pass as RRULE string.
-- For attendees, parse emails (e.g., "invite bob@example.com and alice@example.com") as list of dicts [{email: "bob@example.com"}, {email: "alice@example.com"}].
-- Call `create_event` with parsed values, including description, recurrence, and attendees if provided.
-- After the event is created, respond with a clear confirmation that includes the event title, and the start and end times formatted in the user's local timezone (include timezone abbreviation), plus the event link — followed by a short AI-generated summary in a concise Cal Newport-inspired style: reduce the schedule into one short, concrete, cognitively light statement of what was created, why it matters, and what attention it protects.
-
-Event Updating/Editing Instructions:
-When the user wants to update or edit an event:
-- Identify the event: Use `search_events` or `get_event` if ID is known.
-- Ask for clarification if multiple matches or ambiguous.
-- Use `parse_natural_language_datetime` if updating times/durations.
-- For updating recurrence or attendees, parse and pass as in creation.
-- Call `update_event` with the event ID and only changed fields (pass None for unchanged), including recurrence or attendees.
-- Set `send_updates` to "all" if attendees might be affected, else "none".
-- Respond with confirmation and updated details formatted in the user's local timezone (include timezone abbreviation).
-
-Event Deletion Instructions:
-When the user wants to delete an event:
-- Identify the event: Use `search_events` to find the event ID.
-- Confirm with the user if needed (e.g., show details via `get_event`).
-- Call `delete_event` with the event ID.
-- Set `send_updates` to "all" if notifying others, else "none".
-- Respond with confirmation.
-
-Task Creation and Update Instructions:
-When the user wants to create or update a task:
-- Treat the user's phrase as the task title and parse any due date/time.
-- If a specific time is mentioned (e.g. "feed the cat at 6 PM"), convert it to the user's local timezone and set `due` accordingly using an RFC3339 timestamp.
-- If no specific time is provided, create the task as an all-day task for the parsed date by using the local date with a midnight timestamp or equivalent all-day representation.
-- Use `create_task` for new tasks and `patch_task` for updates, setting only changed fields.
-- When `create_task` is used, please remember to update the description with an AI-generated summary (short) of the events.
-- After creating or updating a task, generate a short AI-generated summary of the events and tasks created in a Cal Newport-inspired style: focus on the next concrete commitment, remove noise, and state the priority in one clear sentence.
-- Confirm the task title and due date/time in the user's local timezone, noting when it is an all-day task.
-
-Event Search and Querying Instructions:
-When the user asks to search or query events:
-- Use `search_events` with query (keywords), time_min/max (parsed via `parse_natural_language_datetime`).
-- Display results in local TZ, including event ID for reference.
-- If no results, say so politely.
-- For upcoming events, use `list_events`.
-
-Importance / Priority Filtering Instructions:
-When the user asks for "important" tasks/events, "top priorities", "what matters" for a given period (e.g., "important tasks for today", "this week"):
-- The Calendar and Tasks APIs do not expose a native importance field, so you must never refuse or say this is unsupported.
-- Use `list_events`/`search_events` (with time_min/time_max parsed via `parse_natural_language_datetime`) and `search_tasks` to fetch every event/task in the requested window first.
-- Then rank/filter them yourself using judgment over the returned titles, descriptions, and attendee counts. Treat as higher-importance signals: urgency keywords (deadline, due, urgent, final, exam, interview, review, submission), events with multiple attendees or external participants, and items explicitly marked or phrased as high-priority by the user in this conversation.
-- Present the filtered/ranked short list first, then note that the ranking is inferred (not an API-provided priority) and offer to show the full unfiltered list if the user wants it.
-- If the fetch returns nothing for the window, say so plainly rather than guessing.
-
-Meeting Time Suggestions Instructions:
-When the user asks to suggest meeting times (e.g., "Suggest a time for a meeting next Tuesday"):
-- Use `suggest_meeting_times` with the target date, duration, and optional time preference (e.g., "morning", "9 AM to 2 PM").
-- Parse inputs using `parse_natural_language_datetime` to get the date and duration.
-- Return 2-3 free time slots in local TZ (e.g., IST).
-- If no slots are available, suggest alternative days or durations.
-- Offer to create an event with the chosen slot (e.g., "Shall I schedule the meeting at 2 PM?").
-- Example: "Suggest a 1-hour meeting next Tuesday morning" returns slots like "2025-09-23 10:00 AM IST - 11:00 AM IST".
-
-General Instructions:
-- Always present start and end times to the user converted to the user's local time zone (include timezone abbreviation); convert to UTC only for API requests.
-- When an event or task is created, respond with a short AI-generated summary following a Cal Newport-inspired pattern: clear, attention-preserving, distraction-reducing, and grounded in the actual created event or task. This can be appended after the user-facing confirmation and should summarize the events and tasks created without adding unnecessary complexity.
-- If the user mentions a place name or landmark (e.g., "Mission San Jose High School"), resolve it to a real address using `resolve_address` and use that address for the event location.
-- For address-only location requests, validate and normalize the address with `resolve_address` before using it.
-- For "next [day]" (e.g., "next Friday"), interpret as next occurrence.
-- If event ID unknown for update/delete, search first.
-- Handle genuine ambiguity by asking questions — but first check the "Ambiguous & Bizarre Input Instructions" above; a vague follow-up that context already resolves is not genuine ambiguity.
-- Keep responses short, user-friendly; no raw JSON.
-- Prioritize clarity and correctness.
+CalendarCategory = Literal[
+    "SCHEDULE_EVENT",
+    "UPDATE_EVENT",
+    "DELETE_EVENT",
+    "LIST_EVENTS",
+    "SCHEDULE_TASK",
+    "UPDATE_TASK",
+    "DELETE_TASK",
+    "LIST_TASKS",
+    "UNKNOWN",
+]
 
 
+# categorizes the request from the context window into a calendar command
+class CalendarCommand(BaseModel):
+    category: CalendarCategory
+    confidence: float = Field(
+        description="Probability score between 0.0 and 1.0 indicating confidence in this category."
+    )
+    request: str = Field(
+        description=(
+            "The full request restated as one self-contained instruction, with every detail the user "
+            "gave or the conversation already settled: title, date, start/end time or duration, "
+            "location, attendees, recurrence, notes, and which existing event/task it refers to."
+        )
+    )
+    missing_info: Optional[str] = Field(
+        default=None,
+        description="What essential detail is missing (e.g. 'no date given'), or null if nothing is missing.",
+    )
+
+
+# classifier agent... sorts requests the way router_agent does for root_agent
+command_classifier = LlmAgent(
+    name="command_classifier",
+    model=MODEL,
+    generate_content_config=types.GenerateContentConfig(temperature=0.0),
+    instruction=(
+        "You sort calendar requests for the calendar_agent. Read the request (and the conversation "
+        "so far, to resolve words like 'it', 'that', or 'move it to 3') and classify it into exactly one "
+        "category, with a probability confidence (0.0 to 1.0):\n"
+        "- 'SCHEDULE_EVENT': create a calendar event that has a time or time range/duration "
+        "(e.g., 'Schedule an appointment with Dr. Chong from 3:20 PM - 4:00 PM', "
+        "'Schedule a barbecue for Walter White Saturday at noon', 'a 2-hour study block Friday at 3pm'). "
+        "Requests to suggest or find a free time for a meeting also go here.\n"
+        "- 'UPDATE_EVENT': change, move, rename, or reschedule an existing event.\n"
+        "- 'DELETE_EVENT': cancel or remove an existing event.\n"
+        "- 'LIST_EVENTS': show, list, or search events (e.g., 'what's on my calendar tomorrow?').\n"
+        "- 'SCHEDULE_TASK': create a to-do that has only a due date/deadline and no time range "
+        "(e.g., 'remind me to finish PIQ 3 by Oct 21', 'add a task to buy milk').\n"
+        "- 'UPDATE_TASK': change an existing task, including marking it done.\n"
+        "- 'DELETE_TASK': remove an existing task.\n"
+        "- 'LIST_TASKS': show, list, or search tasks / to-dos.\n"
+        "- 'UNKNOWN': anything that maps to none of the above.\n"
+        "A 'block' means an event OR a task: use the event categories when it has a time range, the "
+        "task categories when it only has a deadline. If a request lists several items of the same kind "
+        "(e.g., a plan of work sessions), it is still one category; keep every item in `request`.\n"
+        "Fill `request` with a self-contained restatement that includes every detail, and set "
+        "`missing_info` only when something essential is genuinely absent (e.g., no date at all for a new event)."
+    ),
+    output_schema=CalendarCommand,
+    output_key="calendar_command",
+)
+
+CONFIDENCE_THRESHOLD = 0.60
+
+
+def command_router(node_input: Union[CalendarCommand, dict], ctx: Context) -> Event:
+    """
+    Evaluates the category and probability from command_classifier and emits
+    an ADK Event(route=...) that sends the restated request to the executor
+    for that category.
+    """
+    if not node_input:
+        return Event(route="UNKNOWN", output="")
+
+    command = (
+        node_input
+        if isinstance(node_input, CalendarCommand)
+        else CalendarCommand.model_validate(node_input)
+    )
+    ctx.state["last_calendar_command"] = command.model_dump()
+
+    if command.category in CATEGORIES and command.confidence >= CONFIDENCE_THRESHOLD:
+        return Event(route=command.category, output=command.request)
+
+    return Event(route="UNKNOWN", output=command.missing_info or command.request)
+
+
+def ask_for_clarification(node_input: Optional[str], ctx: Context) -> str:
+    """Terminal node for requests that don't map to a calendar command."""
+    command = ctx.state.get("last_calendar_command") or {}
+    missing = command.get("missing_info")
+    if missing:
+        return f"I need a bit more information before I can do that: {missing}. Could you add it?"
+    return (
+        "I'm sorry, I couldn't tell which calendar action you want. I can schedule, update, delete, "
+        "or list events and tasks. Could you rephrase your request?"
+    )
+
+
+# --- Shared instructions for every executor ------------------------------------
+
+COMMON_INSTRUCTIONS = """
+You operate in the user's local time zone.
+
+General:
+- Always show times to the user in their local time zone, with the timezone abbreviation; convert to UTC only for API requests.
+- Use `parse_natural_language_datetime` to turn dates, times, and durations into ISO datetimes. For "next [day]", use the next occurrence.
+- If `parse_natural_language_datetime` raises "Could not parse date/time", the text wasn't a date at all: tell the user you couldn't understand the date/time and ask them to rephrase. Do not guess a date.
+- Keep responses short and user-friendly; no raw JSON.
+
+Tool errors:
+- A tool result with `"status": "error"` means that one call failed; its `tool`, `arguments`, and `error` fields say which and why.
+- When handling several items, keep going with the rest after a failure, and don't retry the same failing arguments more than once.
+- At the end, say which items succeeded and which failed: for each failure, name the item (title and date), the step that failed, and the error in plain words.
+- If the error says the user is not signed in, tell them to sign in again instead of retrying.
+"""
+
+CALENDAR_SELECTION = """
+Calendar selection:
+- When the user hasn't named a calendar, call `list_calendars`, compare the request's topic with each calendar's `summary`, and use the `id` of the best semantic match; if no name is a clear match, use the calendar with `primary: True`.
+- Do this silently; only ask if two calendars are equally strong matches.
 """
 
 
-calendar_agent = LlmAgent(
-    name="calendar_agent",
-    generate_content_config=types.GenerateContentConfig(temperature=0.0),
-    on_tool_error_callback=report_tool_error,
-    description="An agent that can manage your Google Calendar events and tasks including updating, deleting, and searching for events.",
-    instruction=ROOT_INSTRUCTIONS,
+def _executor(name: str, description: str, instruction: str, tools: list) -> LlmAgent:
+    return LlmAgent(
+        name=name,
+        model=MODEL,
+        generate_content_config=types.GenerateContentConfig(temperature=0.0),
+        on_tool_error_callback=report_tool_error,
+        description=description,
+        instruction=COMMON_INSTRUCTIONS + instruction,
+        tools=tools,
+    )
+
+
+# --- SCHEDULE_EVENT -------------------------------------------------------------
+
+schedule_event_agent = _executor(
+    name="schedule_event_agent",
+    description="Creates Google Calendar events, and suggests free meeting times.",
+    instruction=CALENDAR_SELECTION + """
+Scheduling events:
+- Collect the title, start time, and end time or duration. If only a start is given, assume 1 hour.
+- Parse times with `parse_natural_language_datetime` (pass the duration when one is given).
+- If the user names a place or landmark (e.g., "the Cheesecake Factory", "Dr. Chong's office"), resolve it with `resolve_address` and use that address as `location`. Only set a location if the user gave one.
+- Always pass a `description`: use the user's if they gave one; otherwise write a short one from the title and context (who, what, why, anything to bring or prepare). If the title is focused work or 'DEEP WORK', write a ~350-word description on how to achieve that specific goal. If the request includes plan steps, put those steps in the description.
+- For recurring events, convert the recurrence (e.g., "every Tuesday for 5 weeks") with `parse_recurrence` and pass the RRULE.
+- For attendees, pass emails as [{"email": "bob@example.com"}, ...].
+- If the request contains several events (e.g., a plan of work sessions), create each one.
+- If the user asks for a free time instead of a fixed one, use `suggest_meeting_times`, offer 2-3 slots, and ask which to book; don't create the event until they choose.
+- After creating, confirm the title, start and end in local time, and the event link, then one short Cal Newport-style line: what was created, why it matters, and what attention it protects.
+""",
     tools=[
         parse_natural_language_datetime,
         parse_recurrence,
         list_calendars,
-        create_event,
-        update_event,
-        delete_event,
-        search_events,
-        list_events,
+        resolve_address,
         suggest_meeting_times,
-        create_task,
-        patch_task,
-        delete_task,
-        search_tasks,
-        resolve_address
-    ]
-    
+        create_event,
+    ],
 )
 
+# --- UPDATE_EVENT ---------------------------------------------------------------
+
+update_event_agent = _executor(
+    name="update_event_agent",
+    description="Finds an existing Google Calendar event and changes it.",
+    instruction=CALENDAR_SELECTION + """
+Updating events:
+- Find the event with `search_events` (keywords plus a time window parsed with `parse_natural_language_datetime`), or `get_event` if the ID is known. Search the likely calendar(s) from `list_calendars` if it isn't on the primary one.
+- If several events match and it's not clear which one is meant, list them (title, local time) and ask; don't guess.
+- Parse new times with `parse_natural_language_datetime`, recurrence with `parse_recurrence`, and places with `resolve_address`.
+- Call `update_event` with only the changed fields. Set `send_updates` to "all" if the event has attendees, otherwise "none".
+- Confirm the updated details in local time.
+""",
+    tools=[
+        parse_natural_language_datetime,
+        parse_recurrence,
+        list_calendars,
+        resolve_address,
+        search_events,
+        get_event,
+        update_event,
+    ],
+)
+
+# --- DELETE_EVENT ---------------------------------------------------------------
+
+delete_event_agent = _executor(
+    name="delete_event_agent",
+    description="Finds an existing Google Calendar event and deletes it.",
+    instruction=CALENDAR_SELECTION + """
+Deleting events:
+- Find the event with `search_events` (keywords plus a time window parsed with `parse_natural_language_datetime`). Search the likely calendar(s) from `list_calendars` if it isn't on the primary one.
+- Delete only when exactly one event clearly matches. If several match, or the match is uncertain, list the candidates (title, local time) and ask which one; never delete more than the user asked for.
+- Call `delete_event` with the event ID and its calendar ID. Set `send_updates` to "all" if the event has attendees, otherwise "none".
+- Confirm what was deleted (title and local time).
+""",
+    tools=[
+        parse_natural_language_datetime,
+        list_calendars,
+        search_events,
+        get_event,
+        delete_event,
+    ],
+)
+
+# --- LIST_EVENTS ----------------------------------------------------------------
+
+list_events_agent = _executor(
+    name="list_events_agent",
+    description="Lists and searches Google Calendar events.",
+    instruction="""
+Listing events:
+- For "upcoming events" with no window, use `list_events`.
+- For a specific window (e.g., "tomorrow", "this week") or keywords, use `search_events` with `time_min`/`time_max` from `parse_natural_language_datetime` and `query` for keywords.
+- To cover every calendar, call `list_calendars` and search each one; label each event with its calendar name when there is more than one.
+- For "important" or "top priority" requests, fetch the window first, then rank the results yourself (deadlines, exams, interviews, submissions, events with attendees rank higher), and say the ranking is inferred.
+- Show each event's local time and title. If nothing is found, say so plainly.
+""",
+    tools=[
+        parse_natural_language_datetime,
+        list_calendars,
+        list_events,
+        search_events,
+    ],
+)
+
+# --- SCHEDULE_TASK --------------------------------------------------------------
+
+schedule_task_agent = _executor(
+    name="schedule_task_agent",
+    description="Creates Google Tasks with an optional due date.",
+    instruction="""
+Scheduling tasks:
+- Use the user's phrase as the task title and parse any due date/time with `parse_natural_language_datetime`.
+- If a specific time is given (e.g., "feed the cat at 6 PM"), pass it as `due` (ISO datetime). If only a date is given, pass the date as YYYY-MM-DD, which makes it an all-day task.
+- Always pass `notes`: the user's notes if they gave any, otherwise a short summary of what the task is for.
+- If the request contains several tasks, create each one.
+- Confirm the title and due date/time in local time (say when it's all-day), then one short Cal Newport-style line naming the next concrete commitment.
+""",
+    tools=[
+        parse_natural_language_datetime,
+        create_task,
+    ],
+)
+
+# --- UPDATE_TASK ----------------------------------------------------------------
+
+update_task_agent = _executor(
+    name="update_task_agent",
+    description="Finds an existing Google Task and changes it or marks it complete.",
+    instruction="""
+Updating tasks:
+- Find the task with `search_tasks`. If several match and it's not clear which one is meant, list them and ask.
+- Parse new due dates with `parse_natural_language_datetime` (YYYY-MM-DD for all-day).
+- To mark a task done, set `status` to "completed"; to reopen it, "needsAction".
+- Call `patch_task` with only the changed fields, then confirm the result.
+""",
+    tools=[
+        parse_natural_language_datetime,
+        search_tasks,
+        patch_task,
+    ],
+)
+
+# --- DELETE_TASK ----------------------------------------------------------------
+
+delete_task_agent = _executor(
+    name="delete_task_agent",
+    description="Finds an existing Google Task and deletes it.",
+    instruction="""
+Deleting tasks:
+- Find the task with `search_tasks`.
+- Delete only when exactly one task clearly matches. If several match, or the match is uncertain, list them and ask which one; never delete more than the user asked for.
+- Call `delete_task` with the task ID and confirm which task was deleted.
+""",
+    tools=[
+        search_tasks,
+        delete_task,
+    ],
+)
+
+# --- LIST_TASKS -----------------------------------------------------------------
+
+list_tasks_agent = _executor(
+    name="list_tasks_agent",
+    description="Lists and searches Google Tasks.",
+    instruction="""
+Listing tasks:
+- Use `search_tasks` (with `query` for keywords). Hide completed tasks (`show_completed=False`) unless the user asks for them.
+- For a date window (e.g., "due this week"), parse it with `parse_natural_language_datetime` and keep only tasks due in that window.
+- For "important" or "top priority" requests, rank the results yourself (deadlines, exams, submissions rank higher) and say the ranking is inferred.
+- Show each task's title and status. If nothing is found, say so plainly.
+""",
+    tools=[
+        parse_natural_language_datetime,
+        search_tasks,
+    ],
+)
+
+
+calendar_agent = Workflow(
+    name="calendar_agent",
+    description=(
+        "Calendar agent that sorts a request into a calendar command (schedule, update, delete, "
+        "or list events and tasks) and runs the matching Google Calendar / Tasks tools."
+    ),
+    edges=[
+        (START, command_classifier, command_router),
+
+        (
+            command_router,
+            {
+                "SCHEDULE_EVENT": schedule_event_agent,
+                "UPDATE_EVENT": update_event_agent,
+                "DELETE_EVENT": delete_event_agent,
+                "LIST_EVENTS": list_events_agent,
+                "SCHEDULE_TASK": schedule_task_agent,
+                "UPDATE_TASK": update_task_agent,
+                "DELETE_TASK": delete_task_agent,
+                "LIST_TASKS": list_tasks_agent,
+                "UNKNOWN": ask_for_clarification,
+            },
+        ),
+    ],
+)

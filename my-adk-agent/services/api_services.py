@@ -83,6 +83,14 @@ def get_drive_service():
     return _build('drive', 'v3')
 
 
+def get_slides_service():
+    """
+    Returns build() object enabling access to Google Slides, or None if not signed in.
+    The drive.file scope covers presentations this app creates.
+    """
+    return _build('slides', 'v1')
+
+
 def get_drive_access_token():
     """
     The signed-in user's access token for the Google Drive picker, or None if

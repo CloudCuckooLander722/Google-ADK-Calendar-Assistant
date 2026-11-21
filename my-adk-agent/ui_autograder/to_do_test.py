@@ -531,7 +531,21 @@ def services(monkeypatch, to_do):
     calendar, tasks = FakeCalendarService(), FakeTasksService()
     monkeypatch.setattr(to_do, "get_calendar_service", lambda: calendar)
     monkeypatch.setattr(to_do, "get_tasks_service", lambda: tasks)
+    monkeypatch.setattr(to_do, "controller", FakeCookies({"user_id": "user-1"}))
     return calendar, tasks
+
+
+class FakeCookies:
+    """services.cookie_service.controller: controller() and controller.get read the same cookies."""
+
+    def __init__(self, cookies):
+        self.cookies = dict(cookies)
+
+    def __call__(self):
+        return self
+
+    def get(self, name):
+        return self.cookies.get(name)
 
 
 def test_load_agenda_page_shows_the_users_tasks_and_events(to_do, tmp_path, services):
@@ -563,3 +577,26 @@ def test_load_agenda_page_when_signed_out(to_do, tmp_path, monkeypatch):
     assert error is None, f"load_agenda_page() raised {_describe(error)}"
     assert not at.checkbox
     assert any("sign in" in w.value.lower() for w in at.warning), "tell the user to sign in"
+
+
+def test_load_agenda_page_without_a_user_id_cookie(to_do, tmp_path, services, monkeypatch):
+    monkeypatch.setattr(to_do, "controller", FakeCookies({}))
+    at, _, error = _run_page(tmp_path, to_do.load_agenda_page)
+    assert error is None, f"load_agenda_page() raised {_describe(error)}"
+    assert not at.checkbox
+    assert any("sign in" in w.value.lower() for w in at.warning), "tell the user to sign in"
+
+
+def test_load_agenda_page_keeps_the_agenda_in_session_state(to_do, tmp_path, services):
+    at, _, error = _run_page(tmp_path, to_do.load_agenda_page)
+    assert error is None, f"load_agenda_page() raised {_describe(error)}"
+    assert {t["id"] for t in at.session_state[to_do.AGENDA_TASKS_KEY]} == {"task-1", "task-2"}
+    assert len(at.session_state[to_do.AGENDA_EVENTS_KEY]["items"]) == 4
+
+
+def test_display_checks_reads_the_kept_agenda_when_not_given_one(to_do, tmp_path):
+    kept = {to_do.AGENDA_TASKS_KEY: [{"id": "t", "title": "Kept task", "status": "completed"}],
+            to_do.AGENDA_EVENTS_KEY: {"items": [{"id": "e", "summary": "Kept event"}]}}
+    at, _, error = _run_page(tmp_path, lambda: to_do.display_checks(today_date=TODAY), kept)
+    assert error is None, f"display_checks() raised {_describe(error)}"
+    assert _checkboxes(at) == {"task_t": ("Kept task", True), "event_e": ("Kept event", False)}

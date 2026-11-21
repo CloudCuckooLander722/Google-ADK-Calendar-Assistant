@@ -123,6 +123,7 @@ calendar_tool = AgentTool(calendar_agent)
 consultant_agent = LlmAgent(
     name="consultant_agent",
     description="An agent that provides strategic advice and planning assistance.",
+    
     planner=BuiltInPlanner(
                         thinking_config=types.ThinkingConfig(
                             include_thoughts=True,

@@ -62,6 +62,11 @@ LOCAL_DATE_JS = """(() => {
 })()"""
 
 
+# Where load_agenda_page() keeps today's tasks and events in st.session_state.
+AGENDA_TASKS_KEY = "agenda_tasks"
+AGENDA_EVENTS_KEY = "agenda_events"
+
+
 def _zone(timeZone):
     """The user's timezone, or UTC if it isn't known (yet) or isn't valid."""
     try:
@@ -214,6 +219,10 @@ def load_agenda_page():
         st.warning("Sign in with Google to see today's agenda.")
         return
 
+    if controller().get("user_id") is None:
+        st.warning("Sign in with Google to see today's agenda.")
+        return
+
     timeZone = fetch_timezone()
     today_date = fetch_date()
 
@@ -223,17 +232,25 @@ def load_agenda_page():
 
     tasks = _return_tasks(task_service, today_date)
 
+    # Kept for the rest of the session (e.g. to edit them later). Not in cookies:
+    # a browser drops any cookie over ~4 KB, and cookies go back with every request.
+    st.session_state[AGENDA_TASKS_KEY] = tasks
+    st.session_state[AGENDA_EVENTS_KEY] = events_result
+
     display_checks(tasks, events_result, today_date)
 
-    #reminder tommorow to add in custom HTML and also option to create tasks / verify tasks
 
-    
-def display_checks(tasks, events_result, today_date=None):
+def display_checks(tasks=None, events_result=None, today_date=None):
     """
     Displays checkboxes for tasks and events. A completed task starts checked.
-    Params: tasks, events_result, today_date (fetch_date() if not given)
+    Params: tasks, events_result (the last ones load_agenda_page() fetched if not given),
+            today_date (fetch_date() if not given)
     Returns: None
     """
+    if tasks is None:
+        tasks = st.session_state.get(AGENDA_TASKS_KEY) or []
+    if events_result is None:
+        events_result = st.session_state.get(AGENDA_EVENTS_KEY) or {}
 
     todayDate = today_date or fetch_date()
     st.markdown(AGENDA_CSS, unsafe_allow_html=True)
@@ -244,9 +261,10 @@ def display_checks(tasks, events_result, today_date=None):
 
     st.markdown('<h3 class="agenda-subtitle">Tasks</h3>', unsafe_allow_html=True)
     for task in tasks:
+        is_checked = (task.get('status') == 'completed')
         st.checkbox(
             task.get('title') or "Untitled task",
-            value=task.get('status') == "completed",
+            value=is_checked,
             key=f"task_{task['id']}",
         )
     if not tasks:
@@ -254,6 +272,7 @@ def display_checks(tasks, events_result, today_date=None):
 
     events = events_result.get('items', [])
     st.markdown('<h3 class="agenda-subtitle">Events</h3>', unsafe_allow_html=True)
+
     for event in events:
         st.checkbox(event.get('summary') or "Untitled event", key=f"event_{event['id']}")
     if not events:

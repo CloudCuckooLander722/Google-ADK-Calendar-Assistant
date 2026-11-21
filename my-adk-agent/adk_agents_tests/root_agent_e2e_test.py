@@ -344,3 +344,54 @@ def test_off_topic_gets_a_reply_and_nothing_else(script, google):
     assert pending_question(events) is None
     assert "couldn't determine the category" in final_text(events)
     assert google.created_events == []
+
+
+WORK_SESSION = "make a work session on programming for evohacks II"
+WORK_SESSION_TODAY = "make a work session on programming for evohacks II from 1:30 pm to 2:30 pm today"
+
+
+def test_answer_to_a_follow_up_question_continues_the_request(script, google):
+    """The calendar asks a plain-text follow-up ("What day...?") and the next message ("today")
+    is the answer: the router must see the earlier turns and pass on the merged request,
+    not classify "today" alone as UNKNOWN ("couldn't determine the category")."""
+    models = script(
+        router_agent=[
+            Reply({"category": "SCHEDULING", "confidence": 0.9, "request": WORK_SESSION}),
+            Reply({"category": "SCHEDULING", "confidence": 0.9, "request": WORK_SESSION_TODAY}),
+        ],
+        command_classifier=[
+            Reply({"category": "SCHEDULE_EVENT", "confidence": 0.9, "request": WORK_SESSION}),
+            Reply({"category": "SCHEDULE_EVENT", "confidence": 0.95, "request": WORK_SESSION_TODAY}),
+        ],
+        schedule_event_agent=[
+            "What day and time would you like to schedule your work session on programming for evohacks II?",
+            Call("create_event", summary="Programming for evohacks II",
+                 start_datetime="2026-11-21T13:30:00", end_datetime="2026-11-21T14:30:00",
+                 description="Work session."),
+            "Created: Programming for evohacks II, today 1:30-2:30 PM PST.",
+        ],
+    )
+    chat = Session()
+    first = chat.say(WORK_SESSION)
+    assert "What day" in final_text(first)
+
+    events = chat.say("today from 1:30 pm to 2:30 pm")
+
+    router_instruction = chat.state.get("recent_conversation", "")
+    assert f"User: {WORK_SESSION}" in router_instruction
+    assert "Assistant: What day and time" in router_instruction
+    assert "today from 1:30" not in router_instruction, "the current message is not an earlier turn"
+    assert chat.state.get("user_prompt") == WORK_SESSION_TODAY
+    assert WORK_SESSION_TODAY in models["command_classifier"].requests[1]
+    assert [e["summary"] for e in google.created_events] == ["Programming for evohacks II"]
+    assert "couldn't determine the category" not in final_text(events)
+
+
+def test_router_without_a_restated_request_forwards_the_message(script, google):
+    """Older decisions with no `request` keep forwarding the user's own text."""
+    models = script(
+        router_agent=[Reply({"category": "SCHEDULING", "confidence": 0.95})],
+        command_classifier=[Reply({"category": "UNKNOWN", "confidence": 0.2, "request": ""})],
+    )
+    Session().say(HANGOUT)
+    assert HANGOUT in models["command_classifier"].requests[0]

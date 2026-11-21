@@ -5,31 +5,32 @@ Gemini and no Google account.
 Every LlmAgent in the graph gets a ScriptedLlm in place of Gemini: it replies
 with preset answers (route decisions, tool calls, plans), one per model call,
 and records what each agent was sent. The Calendar / Tasks APIs are replaced by
-FakeGoogle, which records every event and task created.
+FakeGoogle and Drive / Slides by FakeDrive, which record everything created.
+The shared helpers live in adk_scripted.py.
 
 What runs for real is everything ADK does between those calls: the Workflow
-graph and its routes, state and output_key, the nested calendar_agent Workflow,
-tool calls, and pausing on RequestInput then resuming from the user's
-function_response. Each AGENTS.md 1.12 test case is one test:
+graph and its routes, state and output_key, the nested calendar_agent and
+workspace_agent Workflows, tool calls, and pausing on RequestInput (including
+inside a nested workflow) then resuming from the user's function_response.
+The AGENTS.md 1.12 test cases:
 
     Hangout       router -> calendar_agent -> create_event
     Chapter 10    router -> ask DEADLINE -> consultant -> ask REVIEW_DECISION
                   -> SCHEDULE -> calendar_agent -> one event per milestone
-    Document A    router -> workspace -> consultant -> REVISE -> consultant
-                  -> SCHEDULE -> calendar_agent
-    Problem set   ... -> CREATE_DOCS -> workspace -> consultant -> SCHEDULE
+    Revise        ... -> REVISE -> consultant -> review again -> SCHEDULE
+    Problem set   router -> workspace_agent (draft -> ask CONFIRM_FOLDER -> save)
+                  -> consultant -> REVIEW_DECISION -> SCHEDULE
+    Create docs   ... -> CREATE_DOCS -> workspace_agent -> review again -> SCHEDULE
+    Document A    expected failure: workspace_agent can't read documents yet
     Cancel        ... -> CANCEL -> reply, nothing created
     Off topic     router -> reply
 
     cd my-adk-agent && ../.venv/bin/python -m pytest adk_agents_tests/root_agent_e2e_test.py -v
 """
-import asyncio
 import json
 import os
 import sys
-import uuid
 from pathlib import Path
-from typing import Any, AsyncGenerator
 
 import pytest
 
@@ -41,63 +42,15 @@ if not os.environ.get("GOOGLE_CREDS_ENCRYPTION_KEY"):
     from cryptography.fernet import Fernet
     os.environ["GOOGLE_CREDS_ENCRYPTION_KEY"] = Fernet.generate_key().decode()
 
-from google.adk import Runner
-from google.adk.models.base_llm import BaseLlm
-from google.adk.models.llm_request import LlmRequest
-from google.adk.models.llm_response import LlmResponse
-from google.adk.sessions import InMemorySessionService
-from google.genai import types
+from adk_scripted import Call, FakeDrive, Reply, final_text, install_scripts, pending_question
+from adk_scripted import Session as ScriptedSession
 
 import adk_agents.root_agent as root
 import adk_agents.calendar_agent as cal
 import adk_agents.consultant_agent as consultant
 import adk_agents.workspace_agent as workspace
 import tools.calendar_tools as calendar_tools
-
-
-# --- Scripted model -------------------------------------------------------------
-
-class Call:
-    """A tool call the scripted model makes."""
-
-    def __init__(self, name: str, **args):
-        self.name, self.args = name, args
-
-
-class Reply:
-    """Structured output (output_schema): sent via set_model_response when the agent has tools."""
-
-    def __init__(self, data: dict):
-        self.data = data
-
-
-def _request_text(request: LlmRequest) -> str:
-    return "\n".join(p.text for c in request.contents or [] for p in c.parts or [] if p.text)
-
-
-class ScriptedLlm(BaseLlm):
-    """Answers each model call with the next step of its script."""
-
-    model: str = "scripted"
-    agent: str = ""
-    script: list[Any] = []
-    requests: list[str] = []
-
-    async def generate_content_async(self, llm_request: LlmRequest, stream: bool = False) -> AsyncGenerator[LlmResponse, None]:
-        self.requests.append(_request_text(llm_request))
-        if not self.script:
-            raise AssertionError(f"{self.agent} was called more times than scripted; last request:\n{self.requests[-1]}")
-        step = self.script.pop(0)
-        if isinstance(step, Call):
-            part = types.Part(function_call=types.FunctionCall(name=step.name, args=step.args))
-        elif isinstance(step, Reply):
-            if "set_model_response" in llm_request.tools_dict:
-                part = types.Part(function_call=types.FunctionCall(name="set_model_response", args=step.data))
-            else:
-                part = types.Part(text=json.dumps(step.data))
-        else:
-            part = types.Part(text=str(step))
-        yield LlmResponse(content=types.Content(role="model", parts=[part]))
+import tools.workspace_tools as workspace_tools
 
 
 # --- Fake Google APIs -------------------------------------------------------------
@@ -148,95 +101,25 @@ def google(monkeypatch):
     return fake
 
 
+@pytest.fixture
+def drive(monkeypatch):
+    fake = FakeDrive()
+    monkeypatch.setattr(workspace_tools, "get_drive_service", lambda: fake)
+    monkeypatch.setattr(workspace_tools, "get_slides_service", lambda: fake)
+    return fake
+
+
 # --- Wiring the scripts in ---------------------------------------------------------
-
-def _llm_nodes(workflow) -> dict:
-    """Every LlmAgent the workflow will actually run, nested Workflows included.
-    (Workflow keeps its own copies of the agents, so patching the module-level
-    agents would not reach them.)"""
-    found = {}
-    for n in workflow.graph.nodes:
-        if hasattr(n, "graph") and n.graph is not None:
-            found.update(_llm_nodes(n))
-        elif hasattr(n, "instruction") and hasattr(n, "model"):
-            found[n.name] = n
-    return found
-
 
 @pytest.fixture
 def script(monkeypatch):
-    """script(router_agent=[...], ...) gives each agent its scripted answers; returns the models.
-    An agent with no script fails the test if it is called."""
-    for key in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
-        monkeypatch.delenv(key, raising=False)  # nothing in this file may reach Gemini
-    models = {}
-
-    def install(**scripts):
-        nodes = _llm_nodes(root.root_agent)
-        unknown = set(scripts) - set(nodes)
-        assert not unknown, f"no such agents in root_agent: {unknown}"
-        for name, agent in nodes.items():
-            model = ScriptedLlm(agent=name, script=list(scripts.get(name, [])))
-            monkeypatch.setattr(agent, "model", model)
-            models[name] = model
-        return models
-
-    return install
+    """script(router_agent=[...], ...) gives each agent its scripted answers; returns the models."""
+    return lambda **scripts: install_scripts(monkeypatch, root.root_agent, **scripts)
 
 
-class Session:
+def Session():
     """One conversation with root_agent through a real Runner."""
-
-    def __init__(self):
-        self.app, self.user, self.id = "root_agent_e2e", "tester", uuid.uuid4().hex
-        self.service = InMemorySessionService()
-        asyncio.run(self.service.create_session(app_name=self.app, user_id=self.user, session_id=self.id))
-        self.runner = Runner(agent=root.root_agent, app_name=self.app, session_service=self.service)
-        self.events = []
-
-    def _run(self, message: types.Content):
-        async def go():
-            out = []
-            async for event in self.runner.run_async(user_id=self.user, session_id=self.id, new_message=message):
-                out.append(event)
-            return out
-        new = asyncio.run(go())
-        self.events += new
-        return new
-
-    def say(self, text: str):
-        return self._run(types.Content(role="user", parts=[types.Part(text=text)]))
-
-    def answer(self, interrupt_id: str, response: dict):
-        """Reply to a RequestInput the way the UI must: a function_response with the interrupt's id."""
-        part = types.Part(function_response=types.FunctionResponse(
-            id=interrupt_id, name="adk_request_input", response=response))
-        return self._run(types.Content(role="user", parts=[part]))
-
-    @property
-    def state(self) -> dict:
-        session = asyncio.run(self.service.get_session(app_name=self.app, user_id=self.user, session_id=self.id))
-        return session.state
-
-
-def pending_question(events) -> tuple[str, dict] | None:
-    """(interrupt id, args) of the RequestInput the run paused on, if any."""
-    for event in reversed(events):
-        for call in event.get_function_calls():
-            if call.name == "adk_request_input":
-                return call.id, call.args or {}
-    return None
-
-
-def final_text(events) -> str:
-    for event in reversed(events):
-        if event.content and event.content.parts:
-            text = "".join(p.text for p in event.content.parts if p.text and not p.thought)
-            if text.strip():
-                return text
-        if isinstance(getattr(event, "output", None), str) and event.output.strip():
-            return event.output
-    return ""
+    return ScriptedSession(root.root_agent)
 
 
 # --- Test cases --------------------------------------------------------------------
@@ -339,19 +222,17 @@ def test_review_shows_the_plan_summary_and_intentions(script, google):
     assert PLAN["summary"] in shown and PLAN["intentions"] in shown and "Ch 10 practice test" in shown
 
 
-def test_document_a_revise_sends_the_note_back_then_schedules(script, google):
+def test_revise_sends_the_note_back_then_schedules(script, google):
     revised = dict(PLAN, summary="Revised: evenings only.")
     models = script(
-        router_agent=[Reply({"category": "WORKSPACE", "confidence": 0.9})],
-        workspace_agent=["Document A lists 3 plans: Ch 10.1-10.2, Ch 10.3-10.4, a practice test."],
+        router_agent=[Reply({"category": "CONSULTING", "confidence": 0.9})],
         consultant_agent=[Reply(PLAN), Reply(revised)],
         **_schedule_plan_script(revised),
     )
     chat = Session()
-
-    question = pending_question(chat.say(DOCUMENT_A))
+    chat.say(CHAPTER_10)
+    question = pending_question(chat.answer("DEADLINE", {"deadline": "Nov 24"}))
     assert question and question[0] == "REVIEW_DECISION"
-    assert "Document A lists 3 plans" in models["consultant_agent"].requests[0], "workspace output reaches the consultant"
 
     # Revise: back to the consultant with the note, then a second review (same interrupt id).
     question = pending_question(chat.answer("REVIEW_DECISION", {"action": "REVISE", "note": "evenings only"}))
@@ -365,23 +246,77 @@ def test_document_a_revise_sends_the_note_back_then_schedules(script, google):
     assert "Revised: evenings only." in models["command_classifier"].requests[0], "the revised plan is the one scheduled"
 
 
-def test_problem_set_can_create_documents_before_scheduling(script, google):
+@pytest.mark.xfail(strict=True, reason=(
+    "workspace_agent has no category for reading a document (AGENTS.md 1.3 lists creation, folders "
+    "and moving), so 'scan Document A' gets its clarification reply instead of Document A's plans"))
+def test_document_a_plans_reach_the_consultant(script, google, drive):
     models = script(
         router_agent=[Reply({"category": "WORKSPACE", "confidence": 0.9})],
-        workspace_agent=["Drafted a 15-question derivatives problem set.",
-                         "Created 'Ch 10 study guide' (not saved to Drive yet)."],
+        workspace_router_agent=[Reply({"category": "UNKNOWN", "confidence": 0.8, "request": DOCUMENT_A})],
+        consultant_agent=[Reply(PLAN)],
+    )
+    chat = Session()
+    question = pending_question(chat.say(DOCUMENT_A))
+    assert question and question[0] == "REVIEW_DECISION"
+    assert "couldn't tell" not in models["consultant_agent"].requests[0], \
+        "the consultant should get Document A's plans, not workspace_agent's clarification message"
+
+
+PROBLEM_SET_DRAFT = {
+    "title": "Derivatives Problem Set", "content": "## Problems\n1. d/dx x^3\n2. d/dx sin x",
+    "works_cited": None, "file_type": "DOC", "folder_topic": "Calculus I", "answer_key": "1. 3x^2\n2. cos x",
+}
+STUDY_GUIDE_DRAFT = dict(PROBLEM_SET_DRAFT, title="Ch 10 Study Guide", answer_key=None, content="## Key ideas\n- chain rule")
+
+
+def test_problem_set_is_saved_then_planned_then_scheduled(script, google, drive):
+    """AGENTS.md: workspace_agent makes the problem set and files it, then the consultant plans, then the calendar."""
+    models = script(
+        router_agent=[Reply({"category": "WORKSPACE", "confidence": 0.9})],
+        workspace_router_agent=[Reply({"category": "DOCUMENT_CREATION", "confidence": 0.9, "request": PROBLEM_SET})],
+        content_agent=[Reply(PROBLEM_SET_DRAFT)],
+        consultant_agent=[Reply(PLAN)],
+        **_schedule_plan_script(),
+    )
+    chat = Session()
+
+    # The nested workspace_agent pauses root_agent to ask where to save the problem set.
+    question = pending_question(chat.say(PROBLEM_SET))
+    assert question and question[0] == "CONFIRM_FOLDER", "workspace_agent asks before writing to Drive"
+    assert drive.created() == [] and models["consultant_agent"].requests == []
+
+    question = pending_question(chat.answer("CONFIRM_FOLDER", {"action": "USE_SUGGESTED", "include_answer_key": True}))
+    [doc] = drive.created()
+    assert doc["parents"] == [drive.folder_named("Calculus I")["id"]]
+    assert question and question[0] == "REVIEW_DECISION", "then the consultant's plan is reviewed"
+    assert "Derivatives Problem Set" in models["consultant_agent"].requests[0], "the consultant hears what was created"
+
+    chat.answer("REVIEW_DECISION", {"action": "SCHEDULE"})
+    assert len(google.created_events) == 3
+
+
+def test_create_docs_runs_workspace_agent_then_reviews_again(script, google, drive):
+    models = script(
+        router_agent=[Reply({"category": "CONSULTING", "confidence": 0.9})],
+        workspace_router_agent=[Reply({"category": "DOCUMENT_CREATION", "confidence": 0.9,
+                                       "request": "Create a Ch 10 study guide"})],
+        content_agent=[Reply(STUDY_GUIDE_DRAFT)],
         consultant_agent=[Reply(PLAN), Reply(PLAN)],
         **_schedule_plan_script(),
     )
     chat = Session()
-    chat.say(PROBLEM_SET)
+    chat.say(CHAPTER_10)
+    chat.answer("DEADLINE", {"deadline": "Nov 24"})
 
-    question = pending_question(chat.answer("REVIEW_DECISION", {"action": "CREATE_DOCS", "note": ""}))
-    assert len(models["workspace_agent"].requests) == 2, "CREATE_DOCS runs workspace_agent again"
-    assert "Create the documents" in models["workspace_agent"].requests[-1]
+    question = pending_question(chat.answer("REVIEW_DECISION", {"action": "CREATE_DOCS"}))
+    assert question and question[0] == "CONFIRM_FOLDER"
+    assert "Create the documents" in models["workspace_router_agent"].requests[0]
+
+    question = pending_question(chat.answer("CONFIRM_FOLDER", {"action": "CREATE_NEW", "folder_name": "Acc Geo Ch 10"}))
+    assert [f["name"] for f in drive.created("folder")] == ["Acc Geo Ch 10"]
     assert question and question[0] == "REVIEW_DECISION", "after the documents, the plan is reviewed again"
 
-    chat.answer("REVIEW_DECISION", {"action": "SCHEDULE", "note": ""})
+    chat.answer("REVIEW_DECISION", {"action": "SCHEDULE"})
     assert len(google.created_events) == 3
 
 

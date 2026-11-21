@@ -140,7 +140,8 @@ async def ask_for_deadline(ctx: Context, node_input: Optional[str] = None):
         )
         return
 
-    deadline = DeadlineAnswer.model_validate(answer).deadline.strip()
+    # Fields the user left out can arrive as None; let the schema's defaults fill them.
+    deadline = DeadlineAnswer.model_validate({k: v for k, v in dict(answer).items() if v is not None}).deadline.strip()
     ctx.state["deadline"] = deadline
     yield Event(output=f"{request}\n\nExam / due date: {deadline or 'none given'}")
 
@@ -206,7 +207,7 @@ async def escalation_to_human(ctx: Context, node_input: Union[dict, str, None] =
         )
         return
 
-    decision = EscalationDecision.model_validate(answer)
+    decision = EscalationDecision.model_validate({k: v for k, v in dict(answer).items() if v is not None})
     ctx.state["review_decision"] = decision.model_dump()
     note = f"\n\nUser's note: {decision.note}" if decision.note else ""
 

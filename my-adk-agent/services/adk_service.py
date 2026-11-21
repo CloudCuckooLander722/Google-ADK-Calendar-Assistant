@@ -1,5 +1,6 @@
 import streamlit as st
 import asyncio
+import json
 import logging
 import time
 import os
@@ -21,7 +22,7 @@ for base in (str(PROJECT_ROOT), str(APP_ROOT)):
     if base not in sys.path:
         sys.path.insert(0, base)
     
-from agents.agent import root_agent
+from adk_agents.root_agent import root_agent
 from config.settings import APP_NAME_FOR_ADK, INITIAL_STATE
 
 
@@ -281,10 +282,110 @@ def ensure_session(runner: Runner, conversation: Conversation) -> None:
     if not session:
         asyncio.run(_create_session(runner, conversation))
 
+# --- Questions the workflow pauses on ------------------------------------------------------
+# root_agent is an ADK Workflow: some steps (the exam date, the plan review, where to save a
+# document, deleting a folder) pause the run with a RequestInput. ADK sends that as an
+# `adk_request_input` function call carrying the question and the JSON schema of the answer;
+# the run resumes when the next message is a function_response with the same id.
+
+REQUEST_INPUT = "adk_request_input"
+ANSWER_MODEL = "gemini-2.5-flash"
+
+
+def pending_question(session) -> tuple[str, dict] | None:
+    """(interrupt id, args) of the question the session is paused on, or None.
+    The same id can be asked more than once (e.g. a plan reviewed again after a
+    revision), so a question is open while it has more calls than answers."""
+    asked, answered, last_args = {}, {}, {}
+    for event in session.events or []:
+        if not event.content:
+            continue
+        for part in event.content.parts or []:
+            call, reply = part.function_call, part.function_response
+            if call and call.name == REQUEST_INPUT and call.id:
+                asked[call.id] = asked.get(call.id, 0) + 1
+                last_args[call.id] = dict(call.args or {})
+            elif reply and reply.name == REQUEST_INPUT and reply.id:
+                answered[reply.id] = answered.get(reply.id, 0) + 1
+    open_ids = [i for i in asked if asked[i] > answered.get(i, 0)]
+    return (open_ids[-1], last_args[open_ids[-1]]) if open_ids else None
+
+
+def _text_of(content: genai_types.Content) -> str:
+    return " ".join(p.text for p in content.parts or [] if getattr(p, "text", None)).strip()
+
+
+def answer_from_reply(question: dict, reply: str) -> dict | None:
+    """
+    Turns the user's free-text reply into the answer the paused step expects
+    (its response_schema), with one structured Gemini call. Returns None when
+    the reply doesn't answer the question (the user moved on to something else).
+    """
+    from google import genai
+
+    schema = question.get("response_schema") or {"type": "string"}
+    wrapper = {
+        "type": "object",
+        "properties": {
+            "answers_the_question": {"type": "boolean"},
+            "answer": schema,
+        },
+        "required": ["answers_the_question", "answer"],
+    }
+    prompt = (
+        "An assistant paused to ask the user a question, and the user replied.\n\n"
+        f"Question:\n{question.get('message') or ''}\n\n"
+        f"User's reply:\n{reply}\n\n"
+        "Fill in `answer` from the reply. Use the schema's defaults for anything the reply doesn't say "
+        "(e.g. 'yes' / 'sounds good' approve; 'no' / 'stop' cancel or decline). Set answers_the_question "
+        "to false only if the reply is about something else entirely."
+    )
+    result = genai.Client().models.generate_content(
+        model=ANSWER_MODEL,
+        contents=prompt,
+        config=genai_types.GenerateContentConfig(
+            temperature=0.0,
+            response_mime_type="application/json",
+            response_json_schema=wrapper,
+        ),
+    )
+    parsed = result.parsed if isinstance(result.parsed, dict) else json.loads(result.text or "{}")
+    if not parsed.get("answers_the_question"):
+        return None
+    answer = parsed.get("answer")
+    return answer if isinstance(answer, dict) else {"value": answer}
+
+
+def _reply_text(events: list) -> str:
+    """What to show the user for one run: the question it paused on, else its last reply.
+    Workflow steps reply either as model text or, for function steps, as a string output."""
+    for event in reversed(events):
+        for call in event.get_function_calls():
+            if call.name == REQUEST_INPUT:
+                return (call.args or {}).get("message") or "I need your input to continue."
+    for event in reversed(events):
+        if event.partial or getattr(event, "author", "") == "user":
+            continue
+        if event.content and event.content.parts:
+            # With include_thoughts=True, Gemini can return its reasoning as a separate
+            # Part with `thought=True` ahead of the answer - only join real answer text.
+            text = "".join(p.text for p in event.content.parts
+                           if getattr(p, "text", None) and not getattr(p, "thought", False))
+            if text.strip():
+                return text
+            if event.get_function_calls() or event.get_function_responses():
+                continue
+        output = getattr(event, "output", None)
+        if isinstance(output, str) and output.strip():
+            return output
+    return ""
+
+
 async def run_adk_async(runner: Runner, user_key: str, session_id: str, content: genai_types.Content | str):
     """
     Asynchronously runs a single turn of the ADK agent conversation.
     `content` is normally built by content(); a plain string is wrapped into a text-only Content.
+    If the workflow is paused on a question, the message is taken as the answer to it.
     """
     if isinstance(content, str):
         content = genai_types.Content(role='user', parts=[genai_types.Part(text=content)]) if content.strip() else None
@@ -300,34 +401,31 @@ async def run_adk_async(runner: Runner, user_key: str, session_id: str, content:
     if not session:
         return "Error: ADK session not found."
 
-    # Prepare the user's message in the format expected by ADK/Gemini.
-    final_response_text = "[Agent encountered an issue]" # Default error message
+    question = pending_question(session)
+    if question and _text_of(content):
+        interrupt_id, args = question
+        try:
+            answer = await asyncio.to_thread(answer_from_reply, args, _text_of(content))
+        except Exception:
+            logging.exception("Could not read the answer to %s in session %s", interrupt_id, session_id)
+            return "Sorry, I couldn't understand that answer. " + (args.get("message") or "")
+        if answer is not None:
+            content = genai_types.Content(role='user', parts=[genai_types.Part(
+                function_response=genai_types.FunctionResponse(id=interrupt_id, name=REQUEST_INPUT, response=answer))])
+
+    events = []
     try:
-        # Iterate through the asynchronous events generated by the ADK runner.
-        # ADK can yield multiple events (e.g., tool calls, interim responses) before the final response.
+        # Let the runner finish (no `break`): abandoning its generator mid-stream makes
+        # OpenTelemetry log "Failed to detach context" tracebacks when it is closed later.
         async for event in runner.run_async(user_id=user_key, session_id=session_id, new_message=content):
-            if event.is_final_response(): # We are only interested in the final response from the agent.
-                if event.content and event.content.parts:
-                    # With include_thoughts=True, Gemini can return the model's
-                    # reasoning as a separate Part with `thought=True` ahead of
-                    # the actual answer - skip those, only join real answer text.
-                    answer_parts = [
-                        part.text
-                        for part in event.content.parts
-                        if getattr(part, "text", None) and not getattr(part, "thought", False)
-                    ]
-                    if answer_parts:
-                        final_response_text = "".join(answer_parts)
-                # No `break`: let the runner finish. Abandoning its generator
-                # mid-stream makes OpenTelemetry log "Failed to detach context"
-                # tracebacks when the generator is closed later.
+            events.append(event)
     except Exception:
         # A tool call, model request, or anything else in the agent pipeline
         # can raise here - never let that crash the whole chat turn.
         logging.exception("ADK agent run failed for session %s", session_id)
         return "Sorry, I ran into an unexpected error handling that request. Please try again."
 
-    return final_response_text or "[Agent returned an empty response]"
+    return _reply_text(events) or "[Agent returned an empty response]"
 
 def run_adk_sync(runner: Runner, user_key: str, session_id: str, content: genai_types.Content | str):
     """

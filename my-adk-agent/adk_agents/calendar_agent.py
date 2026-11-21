@@ -366,10 +366,7 @@ Listing tasks:
 
 calendar_agent = Workflow(
     name="calendar_agent",
-    description=(
-        "Calendar agent that sorts a request into a calendar command (schedule, update, delete, "
-        "or list events and tasks) and runs the matching Google Calendar / Tasks tools."
-    ),
+    description="Schedules, updates, deletes, and lists events and tasks in Google Calendar and Google Tasks.",
     edges=[
         (START, command_classifier, command_router),
 
@@ -386,6 +383,7 @@ calendar_agent = Workflow(
                 "LIST_TASKS": list_tasks_agent,
                 "UNKNOWN": ask_for_clarification,
             },
+            
         ),
-    ],
+    ]
 )

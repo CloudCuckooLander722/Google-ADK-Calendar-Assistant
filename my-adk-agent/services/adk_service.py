@@ -9,6 +9,7 @@ import threading
 from dataclasses import dataclass, field
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
+from google.genai import errors as genai_errors
 from google.genai import types as genai_types
 
 import sys
@@ -381,6 +382,37 @@ def _reply_text(events: list) -> str:
     return ""
 
 
+GENERIC_ERROR_REPLY = "Sorry, I ran into an unexpected error handling that request. Please try again."
+QUOTA_ERROR_REPLY = (
+    "The AI service is unavailable right now: the Gemini API rejected the request "
+    "for billing or quota reasons (out of credits or rate-limited). "
+    "Nothing is wrong with your request; please try again later."
+)
+
+
+def _gemini_quota_error(exc: BaseException) -> genai_errors.APIError | None:
+    """
+    Finds a Gemini 402 (prepaid credits depleted) or 429 (rate limit) error behind exc.
+    ADK wraps model errors (DynamicNodeFailError keeps the original on .error), so this
+    follows .error, __cause__, __context__ and exception groups.
+    """
+    seen, stack = set(), [exc]
+    while stack:
+        err = stack.pop()
+        if err is None or id(err) in seen:
+            continue
+        seen.add(id(err))
+        if isinstance(err, genai_errors.APIError) and err.code in (402, 429):
+            return err
+        stack.extend([getattr(err, "error", None), err.__cause__, err.__context__])
+        stack.extend(getattr(err, "exceptions", None) or [])
+    return None
+
+
+def _error_reply(exc: BaseException) -> str:
+    return QUOTA_ERROR_REPLY if _gemini_quota_error(exc) else GENERIC_ERROR_REPLY
+
+
 async def run_adk_async(runner: Runner, user_key: str, session_id: str, content: genai_types.Content | str):
     """
     Asynchronously runs a single turn of the ADK agent conversation.
@@ -419,11 +451,11 @@ async def run_adk_async(runner: Runner, user_key: str, session_id: str, content:
         # OpenTelemetry log "Failed to detach context" tracebacks when it is closed later.
         async for event in runner.run_async(user_id=user_key, session_id=session_id, new_message=content):
             events.append(event)
-    except Exception:
+    except Exception as exc:
         # A tool call, model request, or anything else in the agent pipeline
         # can raise here - never let that crash the whole chat turn.
         logging.exception("ADK agent run failed for session %s", session_id)
-        return "Sorry, I ran into an unexpected error handling that request. Please try again."
+        return _error_reply(exc)
 
     return _reply_text(events) or "[Agent returned an empty response]"
 
@@ -434,7 +466,7 @@ def run_adk_sync(runner: Runner, user_key: str, session_id: str, content: genai_
     try:
         # Runs the asynchronous function in a new event loop.
         return asyncio.run(run_adk_async(runner, user_key, session_id, content))
-    except Exception:
+    except Exception as exc:
         logging.exception("run_adk_sync failed for session %s", session_id)
-        return "Sorry, I ran into an unexpected error handling that request. Please try again."
+        return _error_reply(exc)
 

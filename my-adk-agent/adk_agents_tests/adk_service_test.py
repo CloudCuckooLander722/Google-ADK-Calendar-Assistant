@@ -188,3 +188,45 @@ def test_answer_from_reply_reads_the_answer_with_the_questions_schema(monkeypatc
     FakeModels.generate_content = lambda self, model, contents, config: type(
         "R", (), {"parsed": {"answers_the_question": False, "answer": {}}, "text": ""})()
     assert service.answer_from_reply({"message": "When is the exam?", "response_schema": schema}, "hi") is None
+
+
+def _depleted_credits():
+    from google.genai import errors
+    return errors.ClientError(402, {"error": {"code": 402, "status": "RESOURCE_EXHAUSTED",
+                                              "message": "Your prepayment credits are depleted."}})
+
+
+def _fail_with(monkeypatch, chat, exc):
+    async def run_async(**kwargs):
+        raise exc
+        yield  # makes this an async generator, like Runner.run_async
+    monkeypatch.setattr(chat.runner, "run_async", run_async)
+
+
+def test_out_of_gemini_credits_says_so_instead_of_a_generic_error(monkeypatch):
+    """The live app's 402 arrives wrapped: DynamicNodeFailError(error=ClientError(402))."""
+    from google.adk.workflow._errors import DynamicNodeFailError
+    chat = Chat()
+    _fail_with(monkeypatch, chat, DynamicNodeFailError(
+        message="Dynamic node root_agent failed", error=_depleted_credits(), error_node_path="root_agent"))
+    assert chat.send("schedule a reminder") == service.QUOTA_ERROR_REPLY
+
+
+def test_a_rate_limit_found_through_the_exception_chain_says_so(monkeypatch):
+    from google.genai import errors
+    chat = Chat()
+    try:
+        try:
+            raise errors.ClientError(429, {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED"}})
+        except errors.ClientError as cause:
+            raise RuntimeError("model call failed") from cause
+    except RuntimeError as wrapped:
+        _fail_with(monkeypatch, chat, wrapped)
+    assert chat.send("hi") == service.QUOTA_ERROR_REPLY
+
+
+def test_other_errors_keep_the_generic_reply(monkeypatch):
+    from google.genai import errors
+    chat = Chat()
+    _fail_with(monkeypatch, chat, errors.ClientError(400, {"error": {"code": 400, "status": "INVALID_ARGUMENT"}}))
+    assert chat.send("hi") == service.GENERIC_ERROR_REPLY

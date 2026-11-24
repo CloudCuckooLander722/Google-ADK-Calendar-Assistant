@@ -7,7 +7,7 @@ from google.adk.agents import LlmAgent
 from google.adk.events import RequestInput
 from google.adk.workflow import START, node
 from google.genai import types
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -40,7 +40,6 @@ WorkspaceCategory = Literal[
 ]
 
 class WorkspaceCommand(BaseModel):
-    model_config = ConfigDict(extra='forbid')
     category: WorkspaceCategory
     confidence: float = Field(
         description="Probability score between 0.0 and 1.0 indicating confidence in this category."
@@ -63,7 +62,6 @@ class DocumentContent(BaseModel):
     Organizes LLM data into a strict, Pydantic schema for reliability.
     content_agent only writes the draft; finding the Drive folder happens in find_folder.
     """
-    model_config= ConfigDict(extra='forbid')
 
     title: str = Field(
                        description="Concise, descriptive title for the document without surrounding quotes or Markdown formatting."

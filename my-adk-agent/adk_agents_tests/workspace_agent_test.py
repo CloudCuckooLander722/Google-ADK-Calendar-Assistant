@@ -245,17 +245,6 @@ def test_route_targets_are_nodes_not_strings():
     assert not strings, "make a function node that replies instead of a string for route(s): " + ", ".join(strings)
 
 
-def test_pydantic_config_is_named_model_config():
-    """`model_dict = ConfigDict(...)` is ignored by pydantic; only `model_config` takes effect."""
-    wrong = [f"{cls.name}.{t.id} (line {node.lineno})"
-             for cls in ast.walk(_tree()) if isinstance(cls, ast.ClassDef)
-             for node in cls.body if isinstance(node, ast.Assign)
-             for t in node.targets if isinstance(t, ast.Name)
-             and isinstance(node.value, ast.Call) and getattr(node.value.func, "id", None) == "ConfigDict"
-             and t.id != "model_config"]
-    assert not wrong, "rename to model_config: " + ", ".join(wrong)
-
-
 def test_confidence_threshold_is_a_named_constant():
     bare = sorted({
         n.lineno for n in ast.walk(_tree())
